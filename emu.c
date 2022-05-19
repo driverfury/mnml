@@ -1022,7 +1022,6 @@ emu_disasm(Emu *emu)
         /* BCS */
         case 0x3d: { printf("BCS %04x", emu_fetch16(emu)); } break;
 
-
         /* BPL */
         case 0x3e: { printf("BPL %04x", emu_fetch16(emu)); } break;
 

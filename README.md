@@ -10,7 +10,7 @@ A toolchain will be built: assembler, compiler of our own C-like language, OS an
 
 It's an emulator of the [Simplest CPU](https://github.com/slu4coder/Minimal-UART-CPU-System).
 
-You can build the emultor with the following commad:
+You can build the emulator with the following commad:
 
 ```bash
 ./gcc -ansi -Wall -Werror -DSTANDALONE -o emu emu.c
