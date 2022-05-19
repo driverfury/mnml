@@ -176,7 +176,11 @@ emu_exec(Emu *emu)
         case 0x02:
         {
             /* Output A to the terminal */
-            printf("asdone %c", (char)emu->a);
+            putchar((int)emu->a);
+#if 1
+            /* I put this here so we can see the output immediately */
+            fflush(stdout);
+#endif
 
             /* Flags status after => NCZ: 100 */
             emu->flags |=  NEG_BIT;
@@ -823,20 +827,241 @@ emu_mem_write(u8 b, u16 addr)
     emu_mem[addr] = b;
 }
 
+void
+emu_disasm(Emu *emu)
+{
+    u16 pc;
+    u8 opc;
+
+    pc = emu->pc;
+    opc = emu_fetch(emu);
+
+    /* TODO: HERE */
+    switch(opc)
+    {
+        /* NOP */
+        case 0x00: { printf("NOP"); } break;
+
+        /* BNK */
+        case 0x01: { printf("BNK"); } break;
+
+        /* OUT */
+        case 0x02: { printf("OUT"); } break;
+
+        /* CLC */
+        case 0x03: { printf("CLC"); } break;
+
+        /* SEC */
+        case 0x04: { printf("SEC"); } break;
+
+        /* LSL */
+        case 0x05: { printf("LSL"); } break;
+
+        /* ROL */
+        case 0x06: { printf("ROL"); } break;
+
+        /* LSR */
+        case 0x07: { printf("LSR"); } break;
+
+        /* ROR */
+        case 0x08: { printf("ROR"); } break;
+
+        /* INP */
+        case 0x0a: { printf("INP"); } break;
+
+        /* NEG */
+        case 0x0b: { printf("NEG"); } break;
+
+        /* INC */
+        case 0x0c: { printf("INC"); } break;
+
+        /* DEC */
+        case 0x0d: { printf("DEC"); } break;
+
+        /* LDI */
+        case 0x0e: { printf("LDI %02x", emu_fetch(emu)); } break;
+
+        /* ADI */
+        case 0x0f: { printf("ADI %02x", emu_fetch(emu)); } break;
+
+        /* SBI */
+        case 0x10: { printf("SBI %02x", emu_fetch(emu)); } break;
+
+        /* CPI */
+        case 0x11: { printf("CPI %02x", emu_fetch(emu)); } break;
+
+        /* ACI */
+        case 0x12: { printf("ACI %02x", emu_fetch(emu)); } break;
+
+        /* SCI */
+        case 0x13: { printf("SCI %02x", emu_fetch(emu)); } break;
+
+        /* JPA */
+        case 0x14: { printf("JPA %04x", emu_fetch16(emu)); } break;
+
+        /* LDA */
+        case 0x15: { printf("LDA %04x", emu_fetch16(emu)); } break;
+
+        /* STA */
+        case 0x16: { printf("STA %04x", emu_fetch16(emu)); } break;
+
+        /* ADA */
+        case 0x17: { printf("ADA %04x", emu_fetch16(emu)); } break;
+
+        /* SBA */
+        case 0x18: { printf("SBA %04x", emu_fetch16(emu)); } break;
+
+        /* CPA */
+        case 0x19: { printf("CPA %04x", emu_fetch16(emu)); } break;
+
+        /* ACA */
+        case 0x1a: { printf("ACA %04x", emu_fetch16(emu)); } break;
+
+        /* SCA */
+        case 0x1b: { printf("SCA %04x", emu_fetch16(emu)); } break;
+
+        /* JPR */
+        case 0x1c: { printf("JPR %04x", emu_fetch16(emu)); } break;
+
+        /* LDR */
+        case 0x1d: { printf("LDR %04x", emu_fetch16(emu)); } break;
+
+        /* STR */
+        case 0x1e: { printf("STR %04x", emu_fetch16(emu)); } break;
+
+        /* ADR */
+        case 0x1f: { printf("ADR %04x", emu_fetch16(emu)); } break;
+
+        /* SBR */
+        case 0x20: { printf("SBR %04x", emu_fetch16(emu)); } break;
+
+        /* CPR */
+        case 0x21: { printf("CPR %04x", emu_fetch16(emu)); } break;
+
+        /* ACR */
+        case 0x22: { printf("ACR %04x", emu_fetch16(emu)); } break;
+
+        /* SCR */
+        case 0x23: { printf("SCR %04x", emu_fetch16(emu)); } break;
+
+        /* CLB */
+        case 0x24: { printf("CLB %04x", emu_fetch16(emu)); } break;
+
+        /* NEB */
+        case 0x25: { printf("NEB %04x", emu_fetch16(emu)); } break;
+
+        /* INB */
+        case 0x26: { printf("INB %04x", emu_fetch16(emu)); } break;
+
+        /* DEB */
+        case 0x27: { printf("DEB %04x", emu_fetch16(emu)); } break;
+
+        /* ADB */
+        case 0x28: { printf("ADB %04x", emu_fetch16(emu)); } break;
+
+        /* SBB */
+        case 0x29: { printf("SBB %04x", emu_fetch16(emu)); } break;
+
+        /* ACB */
+        case 0x2a: { printf("ACB %04x", emu_fetch16(emu)); } break;
+
+        /* SCB */
+        case 0x2b: { printf("SCB %04x", emu_fetch16(emu)); } break;
+
+        /* CLW */
+        case 0x2c: { printf("CLW %04x", emu_fetch16(emu)); } break;
+
+        /* NEW */
+        case 0x2d: { printf("NEW %04x", emu_fetch16(emu)); } break;
+
+        /* INW */
+        case 0x2e: { printf("INW %04x", emu_fetch16(emu)); } break;
+
+        /* DEW */
+        case 0x2f: { printf("DEW %04x", emu_fetch16(emu)); } break;
+
+        /* ADW */
+        case 0x30: { printf("ADW %04x", emu_fetch16(emu)); } break;
+
+        /* SBW */
+        case 0x31: { printf("SBW %04x", emu_fetch16(emu)); } break;
+
+        /* ACW */
+        case 0x32: { printf("ACW %04x", emu_fetch16(emu)); } break;
+
+        /* SCW */
+        case 0x33: { printf("SCW %04x", emu_fetch16(emu)); } break;
+
+        /* LDS */
+        case 0x34: { printf("LDS %02x", emu_fetch(emu)); } break;
+
+        /* STS */
+        case 0x35: { printf("STS %02x", emu_fetch(emu)); } break;
+
+        /* PHS */
+        case 0x36: { printf("PHS"); } break;
+
+        /* PLS */
+        case 0x37: { printf("PLS"); } break;
+
+        /* JPS */
+        case 0x38: { printf("JPS %04x", emu_fetch16(emu)); } break;
+
+        /* RTS */
+        case 0x39: { printf("RTS"); } break;
+
+        /* BNE */
+        case 0x3a: { printf("BNE %04x", emu_fetch16(emu)); } break;
+
+        /* BEQ */
+        case 0x3b: { printf("BEQ %04x", emu_fetch16(emu)); } break;
+
+        /* BCC */
+        case 0x3c: { printf("BCC %04x", emu_fetch16(emu)); } break;
+
+        /* BCS */
+        case 0x3d: { printf("BCS %04x", emu_fetch16(emu)); } break;
+
+
+        /* BPL */
+        case 0x3e: { printf("BPL %04x", emu_fetch16(emu)); } break;
+
+        /* BMI */
+        case 0x3f: { printf("BMI %04x", emu_fetch16(emu)); } break;
+
+        default:
+        {
+            printf("INV");
+        } break;
+    }
+
+    emu->pc = pc;
+}
+
+#ifdef STANDALONE
+
+void
+print_usage(void)
+{
+    printf("USAGE\n ./emu <input.bin> [-d]\n");
+}
+
 int
 main(int argc, char *argv[])
 {
     int halt;
     int dbg;
     int i;
-    char *fin;
-    FILE *f;
+    int c;
+    char *fin_name;
+    FILE *fin;
 
+    fin_name = 0;
     dbg = 0;
 
     if(argc < 2)
     {
-        printf("USAGE\n ./emu <input.bin> [-d]\n");
+        print_usage();
         return(1);
     }
 
@@ -850,23 +1075,29 @@ main(int argc, char *argv[])
         }
         else
         {
-            fin = argv[i];
+            fin_name = argv[i];
         }
     }
 
-    f = fopen(fin, "rb");
-    if(!f)
+    if(!fin_name)
+    {
+        print_usage();
+        return(1);
+    }
+
+    fin = fopen(fin_name, "rb");
+    if(!fin)
     {
         return(2);
     }
 
     i = 0;
-    while(!feof(f))
+    while(!feof(fin))
     {
-        fread((void *)(emu_mem + i), sizeof(u8), 1, f);
+        fread((void *)(emu_mem + i), sizeof(u8), 1, fin);
         ++i;
     }
-    fclose(f);
+    fclose(fin);
 
     emu.mem_read = emu_mem_read;
     emu.mem_write = emu_mem_write;
@@ -877,13 +1108,18 @@ main(int argc, char *argv[])
     {
         if(dbg)
         {
-            char buff[256];
-            printf("PC:%hx A:%hhx FL:-----%c%c%c\n>",
+            emu_disasm(&emu);
+            printf("\nPC:%04x A:%02x FL:-----%c%c%c\n>",
                 emu.pc, emu.a,
                 (emu.flags & NEG_BIT) ? 'N' : 'n',
                 (emu.flags & CARRY_BIT) ? 'C' : 'c',
                 (emu.flags & ZERO_BIT) ? 'Z' : 'z');
-            scanf("%s", buff);
+            c = getchar();
+            i = c;
+            while(i != '\n' && i != EOF)
+            {
+                i = getchar();
+            }
             halt = emu_exec(&emu);
         }
         else
@@ -894,3 +1130,5 @@ main(int argc, char *argv[])
 
     return(0);
 }
+
+#endif
