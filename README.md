@@ -27,3 +27,13 @@ If you want to run the emulator in debug mode:
 ```bash
 ./emu -d program.bin
 ```
+
+## MIN programming language
+
+This is a very minimal C-like programming language. I write the compiler in C and use it as a bootstrap to build a self-hosted compiler in MIN.
+
+The output of the compiler is, of course, assembly language for the simplest CPU.
+
+## Assembler
+
+I made a simple assembler in Python. I will use it as a bootstrap to build an assembler written in MIN.
