@@ -1,0 +1,54 @@
+VAR = 'var'
+FUNC = 'func'
+
+VOID = 'void'
+CHAR = 'char'
+INT = 'int'
+STRUCT = 'struct'
+
+RETURN = 'return'
+IF = 'if'
+ELSE = 'else'
+WHILE = 'while'
+
+SPMEMB = '->'
+
+IDENT = [_A-Za-z][_A-Za-z0-9]*
+INTLIT = [0-9]*
+
+<unit> = <glob_decl>*
+
+<glob_decl> = VAR IDENT ':' <typespec> ';'
+            | FUNC IDENT ':' <typespec> ';' (<decl> ';')* '{' (<decl> ',')* <stmt>* '}'
+            | STRUCT IDENT <struct_def>
+
+<stmt_block> = '{' <stmt>* '}'
+
+<stmt> = IF '(' <expr> ')' <stmt> (ELSE <stmt>)?
+       | WHILE '(' <expr> ')' <stmt>
+       | RETURN <expr>? ';'
+       | '{' <stmt>* '}'
+       | IDENT '(' ')' ';'
+       | <lvalue> '=' <expr> ';'
+
+<lvalue> = IDENT
+         | IDENT '[' <expr> ']'
+         | IDENT '.' IDENT
+         | IDENT SPMEMB IDENT
+         | '*' <lvalue>
+
+<decl> = VAR IDENT ':' <typespec>
+
+<typespec> = VOID
+           | CHAR
+           | INT
+           | <typeref>
+           | '[' typespec ']'
+           | <typespec> '[' <expr> ']'
+
+<struct_def> = '{' (VAR IDENT ':' <typespec> ';')+ '}'
+
+<expr_base> = INTLIT
+            | IDENT
+
+<expr> = <expr_base>
