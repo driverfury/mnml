@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <assert.h>
+#include <ctype.h>
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
@@ -1108,17 +1109,59 @@ main(int argc, char *argv[])
         if(dbg)
         {
             emu_disasm(&emu);
-            printf("\nPC:%04x A:%02x FL:-----%c%c%c\n>",
+            printf("\nPC:%04x A:%02x FL:-----%c%c%c SP:%04x\n>",
                 emu.pc, emu.a,
                 (emu.flags & NEG_BIT) ? 'N' : 'n',
                 (emu.flags & CARRY_BIT) ? 'C' : 'c',
-                (emu.flags & ZERO_BIT) ? 'Z' : 'z');
+                (emu.flags & ZERO_BIT) ? 'Z' : 'z',
+                (int)((int)0xff00 + ((int)emu.mem_read(0xffff))));
             c = getchar();
+
+            while(c != 's')
+            {
+                if(c == 'm')
+                {
+                    i = 0;
+                    c = getchar();
+                    while(isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
+                    {
+                        i *= 16;
+                        if(isdigit(c))
+                        {
+                            i += (c - '0');
+                        }
+                        else if(c >= 'a' && c <= 'f')
+                        {
+                            i += (c - 'a') + 10;
+                        }
+                        else if(c >= 'A' && c <= 'F')
+                        {
+                            i += (c - 'A') + 10;
+                        }
+                        c = getchar();
+                    }
+
+                    printf("%04x: %02x\n", (u16)i, (u8)emu.mem_read(i));
+                    fflush(stdout);
+                }
+
+                i = c;
+                while(i != '\n' && i != EOF)
+                {
+                    i = getchar();
+                }
+
+                printf(">");
+                fflush(stdout);
+                c = getchar();
+            }
+
             i = c;
             while(i != '\n' && i != EOF)
             {
                 i = getchar();
             }
+
             halt = emu_exec(&emu);
         }
         else
