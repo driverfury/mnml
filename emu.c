@@ -1041,9 +1041,83 @@ emu_disasm(Emu *emu)
 #ifdef STANDALONE
 
 void
-print_usage(void)
+usage(void)
 {
     printf("USAGE\n ./emu <input.bin> [-d]\n");
+}
+
+void
+clrin(void)
+{
+    int c;
+
+    c = getchar();
+    while(c != '\n' && c != EOF)
+    {
+        c = getchar();
+    }
+}
+
+int
+scanhex(void)
+{
+    int c;
+    int i;
+
+    i = 0;
+    c = getchar();
+    while(isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
+    {
+        i *= 16;
+        if(isdigit(c))
+        {
+            i += (c - '0');
+        }
+        else if(c >= 'a' && c <= 'f')
+        {
+            i += (c - 'a') + 10;
+        }
+        else if(c >= 'A' && c <= 'F')
+        {
+            i += (c - 'A') + 10;
+        }
+        c = getchar();
+    }
+    ungetc(c, stdin);
+
+    return(i);
+}
+
+#define BRK_MAX_COUNT 100
+u16 brk[BRK_MAX_COUNT];
+int brkcount;
+
+void
+setbrk(u16 addr)
+{
+    brk[brkcount % BRK_MAX_COUNT] = addr;
+    brkcount = (brkcount + 1) % BRK_MAX_COUNT;
+}
+
+int
+isbrk(u16 addr)
+{
+    int res;
+    int i;
+
+    res = 0;
+    for(i = 0;
+        i < brkcount;
+        ++i)
+    {
+        if(brk[i] == addr)
+        {
+            res = 1;
+            break;
+        }
+    }
+
+    return(res);
 }
 
 int
@@ -1055,13 +1129,15 @@ main(int argc, char *argv[])
     int c;
     char *fin_name;
     FILE *fin;
+    int tilbrk;
 
     fin_name = 0;
     dbg = 0;
+    tilbrk = 0;
 
     if(argc < 2)
     {
-        print_usage();
+        usage();
         return(1);
     }
 
@@ -1081,7 +1157,7 @@ main(int argc, char *argv[])
 
     if(!fin_name)
     {
-        print_usage();
+        usage();
         return(1);
     }
 
@@ -1115,54 +1191,45 @@ main(int argc, char *argv[])
                 (emu.flags & CARRY_BIT) ? 'C' : 'c',
                 (emu.flags & ZERO_BIT) ? 'Z' : 'z',
                 (int)((int)0xff00 + ((int)emu.mem_read(0xffff))));
-            c = getchar();
 
-            while(c != 's')
+            c = getchar();
+            while(c != 's' && c != 'c')
             {
                 if(c == 'm')
                 {
-                    i = 0;
-                    c = getchar();
-                    while(isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
-                    {
-                        i *= 16;
-                        if(isdigit(c))
-                        {
-                            i += (c - '0');
-                        }
-                        else if(c >= 'a' && c <= 'f')
-                        {
-                            i += (c - 'a') + 10;
-                        }
-                        else if(c >= 'A' && c <= 'F')
-                        {
-                            i += (c - 'A') + 10;
-                        }
-                        c = getchar();
-                    }
-
+                    i = scanhex();
                     printf("%04x: %02x\n", (u16)i, (u8)emu.mem_read(i));
                     fflush(stdout);
                 }
-
-                i = c;
-                while(i != '\n' && i != EOF)
+                else if(c == 'b')
                 {
-                    i = getchar();
+                    i = scanhex();
+                    printf("break @ %04x\n", (u16)i);
+                    fflush(stdout);
+                    setbrk((u16)i);
                 }
 
+                clrin();
                 printf(">");
                 fflush(stdout);
                 c = getchar();
             }
 
-            i = c;
-            while(i != '\n' && i != EOF)
+            if(c == 'c')
             {
-                i = getchar();
+                tilbrk = 1;
             }
 
+            clrin();
+
             halt = emu_exec(&emu);
+            if(tilbrk)
+            {
+                while(!halt && !isbrk(emu.pc))
+                {
+                    halt = emu_exec(&emu);
+                }
+            }
         }
         else
         {
