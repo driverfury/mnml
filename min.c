@@ -1,8 +1,10 @@
 /*
  * TODO:
  *
- * [ ] Expressions
- * [ ] Function call
+ * [x] Expressions
+ * [x] Functions
+ * [x] Function call statements
+ * [ ] Function call in expressions
  *
  */
 
@@ -12,7 +14,7 @@
 #include <assert.h>
 #include <ctype.h>
 
-#define MAX_IDENT_SIZE 32
+#define MAX_IDENT_LEN 32
 
 #define ALIGN(n,a) ((((n)%(a))>0)?((n)+((a)-((n)%(a)))):(n))
 
@@ -63,7 +65,11 @@ type_int()
 void
 print_type(Type *type)
 {
-    if(type == type_char())
+    if(type == type_void())
+    {
+        printf("void");
+    }
+    else if(type == type_char())
     {
         printf("char");
     }
@@ -99,8 +105,9 @@ typedef struct
 Sym
 {
     int kind;
-    char name[MAX_IDENT_SIZE+1];
+    char name[MAX_IDENT_LEN+1];
     Type *type;
+    struct Sym *params;
     int offset;
     int poffset;
     struct Sym *next;
@@ -177,6 +184,45 @@ dumpsym()
 
 #endif
 
+void
+cut(Sym *sym)
+{
+    Sym *tocut;
+    Sym *prev;
+    Sym *curr;
+
+    if(syms != sym)
+    {
+        prev = 0;
+        tocut = syms;
+        curr = syms;
+        while(curr)
+        {
+            if(curr == sym)
+            {
+                break;
+            }
+            prev = curr;
+            curr = curr->next;
+        }
+
+        if(prev)
+        {
+            prev->next = 0;
+        }
+
+        curr = tocut;
+        while(curr)
+        {
+            prev = curr;
+            curr = curr->next;
+            free(prev);
+        }
+
+        syms = sym;
+    }
+}
+
 Sym *
 lookup(char *name)
 {
@@ -199,16 +245,30 @@ lookup(char *name)
 }
 
 Sym *
-addsym(char *name)
+mksym(char *name)
 {
     Sym *res;
 
     res = (Sym *)malloc(sizeof(Sym));
     if(res)
     {
-        strncpy(res->name, name, MAX_IDENT_SIZE);
-        res->name[MAX_IDENT_SIZE] = 0;
+        strncpy(res->name, name, MAX_IDENT_LEN);
+        res->name[MAX_IDENT_LEN] = 0;
 
+        res->next = 0;
+    }
+
+    return(res);
+}
+
+Sym *
+addsym(char *name)
+{
+    Sym *res;
+
+    res = mksym(name);
+    if(res)
+    {
         res->next = syms;
         syms = res;
     }
@@ -282,12 +342,13 @@ enum
     ELSE,
     WHILE,
 
+    CAST,
     SPMEMB,
 };
 
-char ident[MAX_IDENT_SIZE + 1];
+char ident[MAX_IDENT_LEN + 1];
 int intval;
-char buff[MAX_IDENT_SIZE + 1];
+char buff[MAX_IDENT_LEN + 1];
 
 int
 look(int update)
@@ -297,11 +358,13 @@ look(int update)
     int i;
     long pos;
     int newline;
+    char pbackold;
 
     tok = END;
 
     newline = line;
     pos = ftell(fin);
+    pbackold = pback;
 
     c = getch();
     while(isspace(c))
@@ -339,7 +402,7 @@ look(int update)
 
         while(isalnum(c) || c == '_')
         {
-            if(i < MAX_IDENT_SIZE)
+            if(i < MAX_IDENT_LEN)
             {
                 ident[i] = c;
                 ++i;
@@ -359,6 +422,7 @@ look(int update)
         else if(strcmp(ident, "if") == 0)     { tok = IF; }
         else if(strcmp(ident, "else") == 0)   { tok = ELSE; }
         else if(strcmp(ident, "while") == 0)  { tok = WHILE; }
+        else if(strcmp(ident, "cast") == 0)   { tok = CAST; }
         else if(strcmp(ident, "->") == 0)     { tok = SPMEMB; }
     }
     else
@@ -366,13 +430,14 @@ look(int update)
         tok = (int)c;
     }
 
-    if(!update)
+    if(update)
     {
-        fseek(fin, pos, SEEK_SET);
+        line = newline;
     }
     else
     {
-        line = newline;
+        fseek(fin, pos, SEEK_SET);
+        pback = pbackold;
     }
 
     return(tok);
@@ -409,59 +474,6 @@ expect(int exp)
 
 Sym *currfunc;
 
-void
-parse_expr_base()
-{
-    Sym *sym;
-    int t;
-
-    t = next();
-    if(t == INTLIT)
-    {
-        fprintf(fout, " LDI %d STA ___X LDI %d STA ___X+1\n", (intval&0xff), ((intval>>8)&0xff));
-    }
-    else if(t == IDENT)
-    {
-        sym = lookup(ident);
-        if(!sym)
-        {
-            fprintf(stderr, "Unknown symbol %s\n", ident);
-            assert(0);
-        }
-
-        if(sym->kind == SYM_VAR)
-        {
-            fprintf(fout, " LDA %s STA ___X LDA %s+1 STA ___X+1\n", sym->name, sym->name);
-        }
-        else if(sym->kind == SYM_VAR_LOC)
-        {
-            /* TODO: Check if this is correct */
-            fprintf(fout, " LDA ___BP STA ___Z LDA ___BP+1 STA ___Z+1\n");
-            if(sym->offset != 0)
-            {
-                fprintf(fout, " LDI %d ADW ___Z", sym->offset);
-            }
-            fprintf(fout, " LDA ___Z STA ___Z INW ___Z LDA ___Z STA ___X+1\n");
-        }
-        else
-        {
-            fprintf(stderr, "Invalid symbol %s in expression\n", sym->name);
-            assert(0);
-        }
-    }
-    else
-    {
-        fprintf(stderr, "Invalid base expression\n");
-        assert(0);
-    }
-}
-
-void
-parse_expr()
-{
-    parse_expr_base();
-}
-
 Type *
 parse_typespec()
 {
@@ -489,11 +501,610 @@ parse_typespec()
     return(res);
 }
 
-void
+enum
+{
+    EXPR_INTLIT,
+    EXPR_ID,
+
+    EXPR_ARR,
+    EXPR_SMEMB,
+    EXPR_SPMEMB,
+
+    EXPR_NEG,
+    EXPR_DER,
+    EXPR_ADR,
+    EXPR_CST,
+
+    EXPR_MUL,
+    EXPR_DIV,
+    EXPR_MOD,
+
+    EXPR_ADD,
+    EXPR_SUB,
+
+    EXPR_COUNT
+};
+
+typedef struct
+Expr
+{
+    int kind;
+
+    char id[MAX_IDENT_LEN];
+    int val;
+    Type *cast;
+
+    struct Expr *l;
+    struct Expr *r;
+
+    Type *type;
+} Expr;
+
+Expr *
+mkexprint(int val)
+{
+    Expr *res;
+
+    res = (Expr *)malloc(sizeof(Expr));
+    if(res)
+    {
+        res->type = 0;
+        res->kind = EXPR_INTLIT;
+        res->val = val;
+    }
+
+    return(res);
+}
+
+Expr *
+mkexprid(char *id)
+{
+    Expr *res;
+
+    res = (Expr *)malloc(sizeof(Expr));
+    if(res)
+    {
+        res->type = 0;
+        res->kind = EXPR_ID;
+        strncpy(res->id, id, MAX_IDENT_LEN);
+        res->id[MAX_IDENT_LEN] = 0;
+    }
+
+    return(res);
+}
+
+Expr *
+mkexprun(int kind, Expr *l)
+{
+    Expr *res;
+
+    res = (Expr *)malloc(sizeof(Expr));
+    if(res)
+    {
+        res->type = 0;
+        res->kind = kind;
+        res->l = l;
+    }
+
+    return(res);
+}
+
+Expr *
+mkexprcast(Type *cast, Expr *l)
+{
+    Expr *res;
+
+    res = mkexprun(EXPR_CST, l);
+    if(res)
+    {
+        res->type = 0;
+        res->cast = cast;
+    }
+
+    return(res);
+}
+
+Expr *
+mkexprbin(int kind, Expr *l, Expr *r)
+{
+    Expr *res;
+
+    res = (Expr *)malloc(sizeof(Expr));
+    if(res)
+    {
+        res->type = 0;
+        res->kind = kind;
+        res->l = l;
+        res->r = r;
+    }
+
+    return(res);
+}
+
+Type *
+resolve_lvalue(Expr *e)
+{
+    Type *t;
+    Sym *sym;
+
+    t = 0;
+    if(e->kind == EXPR_ID)
+    {
+        sym = lookup(e->id);
+        if(!sym)
+        {
+            fprintf(stderr, "Invalid symbol in expression\n");
+            assert(0);
+        }
+
+        if(sym->kind == SYM_VAR)
+        {
+            fprintf(fout, " LDI <%s STA .Z LDI >%s STA .Z+1\n", sym->name, sym->name);
+        }
+        else if(sym->kind == SYM_VAR_LOC)
+        {
+            fprintf(fout, " LDA ___BP_%s STA .Z LDA ___BP_%s+1 STA .Z+1\n", currfunc->name, currfunc->name);
+            if(sym->offset != 0)
+            {
+                fprintf(fout, " LDI %d ADW .Z\n", sym->offset);
+            }
+        }
+        else
+        {
+            fprintf(stderr, "Invalid lvalue expression\n");
+            assert(0);
+        }
+
+        t = sym->type;
+    }
+    else if(e->kind == EXPR_DER)
+    {
+        t = resolve_lvalue(e->l);
+        if(t->kind != TYPE_PTR)
+        {
+            fprintf(stderr, "Cannot dereference a non-pointer\n");
+        }
+
+        fprintf(fout, " LDA .Z STA .X LDA .Z+1 STA .X+1\n");
+        fprintf(fout, " LDR .X STA .Z INW .X LDR .X STA .Z+1\n");
+
+        t = t->base;
+    }
+    else
+    {
+        /* TODO: HERE */
+        assert(0);
+    }
+
+    assert(t);
+
+    return(t);
+}
+
+Type *
+resolve_expr(Expr *e, Type *wanted)
+{
+    Type *t;
+    Type *lt;
+    Type *rt;
+    Sym *sym;
+
+    assert(e);
+
+    t = 0;
+    if(e->kind == EXPR_INTLIT)
+    {
+        if(e->val > 0xff)
+        {
+            t = type_int();
+        }
+        else
+        {
+            t = type_char();
+        }
+
+        if(t == type_char() && wanted == type_int())
+        {
+            t = type_int();
+        }
+        else if(t == type_int() && wanted == type_char())
+        {
+            fprintf(stderr, "Integer overflow, char > 255\n");
+            assert(0);
+        }
+
+        fprintf(fout, " LDI %d STA .X LDI %d STA .X+1\n", (e->val&0xff), ((e->val>>8)&0xff));
+    }
+    else if(e->kind == EXPR_ID)
+    {
+        sym = lookup(e->id);
+        if(!sym)
+        {
+            fprintf(stderr, "Invalid symbol %s in expression\n", e->id);
+            assert(0);
+        }
+
+        t = sym->type;
+
+        if(sym->kind == SYM_VAR)
+        {
+            if(t->width == 1)
+            {
+                fprintf(fout, " LDA %s STA .X\n", sym->name);
+            }
+            else if(t->width == 2)
+            {
+                fprintf(fout, " LDA %s STA .X LDA %s+1 STA .X+1\n", sym->name, sym->name);
+            }
+            else
+            {
+                assert(0);
+            }
+        }
+        else if(sym->kind == SYM_VAR_LOC)
+        {
+            fprintf(fout, " LDA ___BP_%s STA .Y LDA ___BP_%s+1 STA .Y+1\n", currfunc->name, currfunc->name);
+            if(sym->offset != 0)
+            {
+                fprintf(fout, " LDI %d ADW .Y", sym->offset);
+            }
+            if(t->width == 1)
+            {
+                fprintf(fout, " LDA .Y STA .X\n");
+            }
+            else if(t->width == 2)
+            {
+                fprintf(fout, " LDR .Y STA .X INW .Y LDR .Y STA .X+1\n");
+            }
+            else
+            {
+                assert(0);
+            }
+        }
+        else
+        {
+            fprintf(stderr, "Invalid var or const %s in expression\n", sym->name);
+            assert(0);
+        }
+    }
+    else if(e->kind == EXPR_NEG)
+    {
+        lt = resolve_expr(e->l, 0);
+        if(lt != type_char() && lt != type_int())
+        {
+            fprintf(stderr, "Cannot negate a non-arithmetic type\n");
+            assert(0);
+        }
+
+        t = lt;
+        if(t->width == 1)
+        {
+            fprintf(fout, " LDA .X NEG STA .X\n");
+        }
+        else if(t->width == 2)
+        {
+            fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+            fprintf(fout, " LDI 0 STA .X STA .X+1\n");
+            fprintf(fout, " LDA .Y SBB .X LDA .Y+1 SCB .X+1\n");
+        }
+        else
+        {
+            assert(0);
+        }
+    }
+    else if(e->kind == EXPR_DER)
+    {
+        lt = resolve_lvalue(e->l);
+        if(lt->kind != TYPE_PTR)
+        {
+            fprintf(stderr, "Cannot dereference a non-pointer");
+        }
+        t = lt->base;
+
+        if(t->width == 1)
+        {
+            fprintf(fout, " LDR .X STA .Y\n");
+            fprintf(fout, " LDA .Y STA .X\n");
+        }
+        else if(t->width == 2)
+        {
+            fprintf(fout, " LDR .X STA .Y INW .X LDR .X STA .Y+1\n");
+            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
+        }
+        else
+        {
+            assert(0);
+        }
+    }
+    else if(e->kind == EXPR_ADR)
+    {
+        /* TODO: HERE */
+        assert(0);
+    }
+    else if(e->kind == EXPR_CST)
+    {
+        t = e->cast;
+        lt = resolve_expr(e->l, t);
+
+        if(lt != t)
+        {
+            if( (lt == type_char() && t == type_int()) ||
+                (lt == type_int() && t == type_char()))
+            {
+                fprintf(fout, " LDI 0 STA .X+1\n");
+            }
+            else if(lt->kind == TYPE_PTR && t->kind == TYPE_PTR)
+            {
+                /* Nothing */
+            }
+            else
+            {
+                fprintf(fout, "Invalid cast operation\n");
+            }
+        }
+    }
+    else if(e->kind == EXPR_MUL)
+    {
+        /* TODO: HERE */
+        assert(0);
+    }
+    else if(e->kind == EXPR_DIV)
+    {
+        /* TODO: HERE */
+        assert(0);
+    }
+    else if(e->kind == EXPR_MOD)
+    {
+        /* TODO: HERE */
+        assert(0);
+    }
+    else if(e->kind == EXPR_ADD)
+    {
+        /* TODO: Pointer aithmetic */
+        lt = resolve_expr(e->l, 0);
+        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        rt = resolve_expr(e->r, lt);
+        if( (lt != type_char() && lt != type_int()) ||
+            (rt != type_char() && rt != type_int()))
+        {
+            fprintf(stderr, "Cannot add a non-arithmetic type\n");
+            assert(0);
+        }
+
+        if(lt == type_char() && rt == type_char())
+        {
+            t = type_char();
+        }
+        else
+        {
+            t = type_int();
+        }
+
+        if(t->width == 1)
+        {
+            fprintf(fout, " LDA .Y ADB .X\n");
+        }
+        else if(t->width == 2)
+        {
+            fprintf(fout, " LDA .Y ADB .X LDA .Y+1 ACB .X+1\n");
+        }
+        else
+        {
+            assert(0);
+        }
+    }
+    else if(e->kind == EXPR_SUB)
+    {
+        /* TODO: Pointer aithmetic */
+        lt = resolve_expr(e->l, 0);
+        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        rt = resolve_expr(e->r, lt);
+        if( (lt != type_char() && lt != type_int()) ||
+            (rt != type_char() && rt != type_int()))
+        {
+            fprintf(stderr, "Cannot add a non-arithmetic type\n");
+            assert(0);
+        }
+
+        if(lt == type_char() && rt == type_char())
+        {
+            t = type_char();
+        }
+        else
+        {
+            t = type_int();
+        }
+
+        if(t->width == 1)
+        {
+            fprintf(fout, " LDA .Y SBB .X\n");
+        }
+        else if(t->width == 2)
+        {
+            fprintf(fout, " LDA .Y SBB .X LDA .Y+1 SCB .X+1\n");
+        }
+        else
+        {
+            assert(0);
+        }
+    }
+    else
+    {
+        assert(0);
+    }
+
+    assert(t);
+
+    return(t);
+}
+
+Expr *parse_expr();
+
+Expr *
+parse_expr_base()
+{
+    Expr *e;
+    int t;
+
+    e = 0;
+    t = next();
+    if(t == INTLIT)
+    {
+        e = mkexprint(intval);
+    }
+    else if(t == IDENT)
+    {
+        e = mkexprid(ident);
+    }
+    else if(t == '(')
+    {
+        e = parse_expr();
+        expect(')');
+    }
+    else
+    {
+        fprintf(stderr, "Invalid base expression\n");
+        assert(0);
+    }
+
+    return(e);
+}
+
+/* TODO: HERE */
+Expr *
+parse_expr_first()
+{
+    Expr *e;
+
+    e = parse_expr_base();
+
+    return(e);
+}
+
+Expr *
+parse_expr_unary()
+{
+    Expr *e;
+    Type *type;
+    int t;
+
+    e = 0;
+    t = peek();
+    if(t == '+')
+    {
+        next();
+        e = parse_expr_unary();
+    }
+    else if(t == '-')
+    {
+        next();
+        e = parse_expr_unary();
+        e = mkexprun(EXPR_NEG, e);
+    }
+    else if(t == '*')
+    {
+        next();
+        e = parse_expr_unary();
+        e = mkexprun(EXPR_DER, e);
+    }
+    else if(t == '&')
+    {
+        next();
+        e = parse_expr_unary();
+        e = mkexprun(EXPR_ADR, e);
+    }
+    else if(t == CAST)
+    {
+        next();
+        expect('<');
+        type = parse_typespec();
+        expect('>');
+
+        e = parse_expr_unary();
+        e = mkexprcast(type, e);
+    }
+    else
+    {
+        e = parse_expr_base();
+    }
+
+    return(e);
+}
+
+Expr *
+parse_expr_mul()
+{
+    Expr *l;
+    Expr *r;
+    int t;
+    int k;
+
+    l = 0;
+    r = 0;
+
+    l = parse_expr_unary();
+    t = peek();
+    while(t == '*' || t == '/' || t == '%')
+    {
+        next();
+
+             if(t == '*') { k = EXPR_MUL; }
+        else if(t == '/') { k = EXPR_DIV; }
+        else if(t == '%') { k = EXPR_MOD; }
+        else { assert(0); }
+
+        r = parse_expr_unary();
+        l = mkexprbin(k, l, r);
+
+        t = peek();
+    }
+
+    return(l);
+}
+
+Expr *
+parse_expr_add()
+{
+    Expr *l;
+    Expr *r;
+    int t;
+    int k;
+
+    l = 0;
+    r = 0;
+
+    l = parse_expr_unary();
+    t = peek();
+    while(t == '+' || t == '-')
+    {
+        next();
+
+             if(t == '+') { k = EXPR_ADD; }
+        else if(t == '-') { k = EXPR_SUB; }
+        else { assert(0); }
+
+        r = parse_expr_unary();
+        l = mkexprbin(k, l, r);
+
+        t = peek();
+    }
+
+    return(l);
+}
+
+Expr *
+parse_expr()
+{
+    return(parse_expr_add());
+}
+
+Sym *
 parse_decl(int param)
 {
     Sym *sym;
     Type *type;
+
+    type = 0;
 
     expect(VAR);
     expect(IDENT);
@@ -527,98 +1138,82 @@ parse_decl(int param)
     {
         sym->kind = SYM_VAR;
     }
+
+    assert(sym);
+
+    return(sym);
 }
 
-void
+Expr *
 parse_lvalue(char *id)
 {
-    Sym *sym;
-    int deref;
+    Expr *e;
     int t;
 
-    deref = 0;
-    if(!id)
+    e = 0;
+    if(id)
     {
-        t = peek();
-        while(t == '*')
+        e = mkexprid(id);
+    }
+    else
+    {
+        t = next();
+        if(t == IDENT)
         {
-            next();
-            ++deref;
-            t = peek();
+            e = mkexprid(ident);
         }
-        expect(IDENT);
-        id = ident;
-    }
-
-    sym = lookup(id);
-    if(!sym || (sym->kind != SYM_VAR && sym->kind != SYM_VAR_LOC))
-    {
-        fprintf(stderr, "Invalid lvalue\n");
-        assert(0);
-    }
-
-    if(sym->kind == SYM_VAR)
-    {
-        fprintf(fout, " LDI <%s STA ___Z LDI >%s STA ___Z+1\n", sym->name, sym->name);
-    }
-    else if(sym->kind == SYM_VAR_LOC)
-    {
-        fprintf(fout, " LDA ___BP STA ___Z LDA ___BP+1 STA ___Z+1\n");
-        if(sym->offset != 0)
+        else if(t == '*')
         {
-            fprintf(fout, " LDI %d ADW ___Z\n", sym->offset);
+            e = parse_lvalue(0);
+            e = mkexprun(EXPR_DER, e);
+        }
+        else if(t == '(')
+        {
+            e = parse_lvalue(0);
+            expect(')');
+        }
+        else
+        {
+            fprintf(stderr, "Invalid lvalue\n");
+            assert(0);
         }
     }
 
     t = peek();
     if(t == '[')
     {
-        if(sym->type->kind != TYPE_ARR && sym->type->kind != TYPE_PTR)
-        {
-            fprintf(stderr, "Invalid array subscription operator\n");
-            assert(0);
-        }
-
         expect('[');
-        parse_expr();
+        e = mkexprbin(EXPR_ARR, e, parse_expr());
         expect(']');
-
-        /* TODO: Check if this is correct */
-        fprintf(fout, " LDB ___X ADB ___Z\n");
-        fprintf(fout, " LDB ___X+1 ACB ___Z+1\n");
     }
     else if(t == '.')
     {
-        if(sym->type->kind != TYPE_STRUCT)
-        {
-            fprintf(stderr, "Invalid struct member access\n");
-            assert(0);
-        }
-
-        expect('.');
+        next();
         expect(IDENT);
-
-        /* TODO: HERE */
+        e = mkexprbin(EXPR_SMEMB, e, mkexprid(ident));
     }
     else if(t == SPMEMB)
     {
-        if(sym->type->kind != TYPE_PTR && sym->type->base->kind != TYPE_STRUCT)
-        {
-            fprintf(stderr, "Invalid struct pointer member access\n");
-            assert(0);
-        }
-
-        expect(SPMEMB);
+        next();
         expect(IDENT);
-
-        /* TODO: HERE */
+        e = mkexprbin(EXPR_SPMEMB, e, mkexprid(ident));
     }
+
+    assert(e);
+
+    return(e);
 }
 
 void
 parse_stmt()
 {
+    Expr *e;
+    Type *lt;
+    Type *rt;
+    Sym *sym;
+    Sym *param;
     int t;
+    int paramsz;
 
     t = peek();
     if(t == IF)
@@ -635,13 +1230,24 @@ parse_stmt()
     {
         next();
 
-        /* TODO: Check function return type compatibility */
-        parse_expr();
+        t = peek();
+        if(t != ';')
+        {
+            e = parse_expr();
+            lt = resolve_expr(e, 0);
+        }
+        else
+        {
+            lt = type_void();
+        }
         expect(';');
 
-        fprintf(fout, " LDA ___BP STA ___Z LDA ___BP+1 STA ___Z+1\n");
-        fprintf(fout, " LDI 4 ADW ___Z\n");
-        fprintf(fout, " LDA ___X STR ___Z INW ___Z LDA ___X+1 STR ___Z\n");
+        /* TODO: Check function return type compatibility */
+
+        /* TODO: This based on return type width */
+        fprintf(fout, " LDA ___BP_%s STA .Z LDA ___BP_%s+1 STA .Z+1\n", currfunc->name, currfunc->name);
+        fprintf(fout, " LDI 3 ADW .Z\n");
+        fprintf(fout, " LDA .X STR .Z INW .Z LDA .X+1 STR .Z\n");
     }
     else if(t == '{')
     {
@@ -658,36 +1264,144 @@ parse_stmt()
     {
         if(t == IDENT)
         {
-            strncpy(buff, ident, MAX_IDENT_SIZE);
-            buff[MAX_IDENT_SIZE] = 0;
+            strncpy(buff, ident, MAX_IDENT_LEN);
+            buff[MAX_IDENT_LEN] = 0;
+            sym = lookup(buff);
 
             next();
             t = peek();
             if(t == '(')
             {
+                if(sym->kind != SYM_FUNC)
+                {
+                    fprintf(stderr, "Cannot call a non-function\n");
+                    assert(0);
+                }
+
+                paramsz = 0;
+                param = sym->params;
                 expect('(');
-                /* TODO: Function call */
-                /* TODO: HERE */
+                t = peek();
+                while(t != ')')
+                {
+                    if(!param)
+                    {
+                        fprintf(stderr, "Invalid param for function %s\n", sym->name);
+                        assert(0);
+                    }
+                    e = parse_expr();
+                    lt = resolve_expr(e, param->type);
+
+                    if(lt != param->type)
+                    {
+                        fprintf(stderr, "Function %s param type mismatch\n", sym->name);
+                        assert(0);
+                    }
+
+                    fprintf(fout, " ;push param %s\n", param->name);
+                    if(lt->width == 1)
+                    {
+                        fprintf(fout, " LDI 0 PHS LDA .X PHS\n");
+                    }
+                    else if(lt->width == 2)
+                    {
+                        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+                    }
+                    else
+                    {
+                        assert(0);
+                    }
+
+                    paramsz += ALIGN(lt->width, 2);
+                
+                    param = param->next;
+
+                    t = peek();
+                    if(t != ')')
+                    {
+                        expect(',');
+                        t = peek();
+                    }
+                }
+
+                if(param)
+                {
+                    fprintf(stderr, "Invalid num of arguments for function %s\n", sym->name);
+                    assert(0);
+                }
+
                 expect(')');
+
+                if(sym->type->width > 0)
+                {
+                    fprintf(fout, " ;reserve space for ret %s\n", sym->name);
+                    fprintf(fout, " LDI %d SBB 0xffff\n", ALIGN(sym->type->width, 2));
+                    paramsz += ALIGN(sym->type->width, 2);
+                }
+
+                fprintf(fout, " ;call %s\n", sym->name);
+                fprintf(fout, " JPS %s\n", sym->name);
+                if(paramsz > 0)
+                {
+                    fprintf(fout, " LDI %d ADB 0xffff\n", paramsz);
+                }
             }
             else
             {
-                parse_lvalue(buff);
+                e = parse_lvalue(buff);
                 expect('=');
-                parse_expr();
+                lt = resolve_lvalue(e);
+                rt = resolve_expr(parse_expr(), lt);
 
-                fprintf(fout, " LDA ___X STR ___Z\n");
-                fprintf(fout, " INW ___Z LDA ___X+1 STR ___Z\n");
+                if(lt != rt)
+                {
+                    fprintf(stderr, "Type mismatch in assignment\n");
+                    assert(0);
+                }
+
+                if(lt->width == 1)
+                {
+                    fprintf(fout, " LDA .X STR .Z\n");
+                }
+                else if(lt->width == 2)
+                {
+                    fprintf(fout, " LDA .X STR .Z\n");
+                    fprintf(fout, " INW .Z LDA .X+1 STR .Z\n");
+                }
+                else
+                {
+                    /* TODO: HERE */
+                    assert(0);
+                }
             }
         }
         else
         {
-            parse_lvalue(0);
+            e = parse_lvalue(0);
             expect('=');
-            parse_expr();
+            lt = resolve_lvalue(e);
+            rt = resolve_expr(parse_expr(), lt);
 
-            fprintf(fout, " LDA ___X STR ___Z\n");
-            fprintf(fout, " INW ___Z LDA ___X+1 STR ___Z\n");
+            if(lt != rt)
+            {
+                fprintf(stderr, "Type mismatch in assignment\n");
+                assert(0);
+            }
+
+            if(lt->width == 1)
+            {
+                fprintf(fout, " LDA .X STR .Z\n");
+            }
+            else if(lt->width == 2)
+            {
+                fprintf(fout, " LDA .X STR .Z\n");
+                fprintf(fout, " INW .Z LDA .X+1 STR .Z\n");
+            }
+            else
+            {
+                /* TODO: HERE */
+                assert(0);
+            }
         }
 
         expect(';');
@@ -701,6 +1415,9 @@ parse_glob_decl()
     Type *type;
     int t;
     int i;
+    Sym *params;
+    Sym *param;
+    Sym *tmp;
 
     t = next();
     if(t == VAR)
@@ -729,12 +1446,13 @@ parse_glob_decl()
     {
         expect(IDENT);
         fprintf(fout, "%s:\n", ident);
-        fprintf(fout, " LDA 0xffff STA ___BP\n");
         sym = addsym(ident);
         sym->kind = SYM_FUNC;
         sym->offset = 2;
-        sym->poffset = 2;
+        sym->poffset = 3;
         currfunc = sym;
+
+        fprintf(fout, " LDA 0xffff STA ___BP_%s\n", currfunc->name);
 
         expect(':');
         type = parse_typespec();
@@ -742,15 +1460,32 @@ parse_glob_decl()
         {
             sym->poffset += ALIGN(type->width, 2);
         }
+        sym->type = type;
         expect(';');
 
+        params = 0;
+        param = 0;
         t = peek();
         while(t != '{')
         {
-            parse_decl(1);
+            tmp = parse_decl(1);
+            if(param)
+            {
+                param->next = mksym(tmp->name);
+                param = param->next;
+            }
+            else
+            {
+                param = mksym(tmp->name);
+                params = param;
+            }
+            param->next = 0;
+            param->type = tmp->type;
+
             expect(';');
             t = peek();
         }
+        sym->params = params;
 
         expect('{');
 
@@ -762,7 +1497,7 @@ parse_glob_decl()
             t = peek();
         }
 
-        if(sym->offset != 0)
+        if(sym->offset > 2)
         {
             fprintf(fout, " LDI %d ADB 0xffff\n", sym->offset);
         }
@@ -775,8 +1510,12 @@ parse_glob_decl()
 
         expect('}');
 
-        fprintf(fout, " LDA ___BP STA 0xffff\n");
+        fprintf(fout, " LDA ___BP_%s STA 0xffff\n", currfunc->name);
         fprintf(fout, " RTS\n");
+
+        fprintf(fout, "___BP_%s: 0x00 0xff\n", currfunc->name);
+
+        cut(currfunc);
     }
     else if(t == STRUCT)
     {
@@ -804,23 +1543,31 @@ int
 main()
 {
     fin = fopen("test.min", "r");
+#ifdef GDB
+    fout = fopen("test.asm", "w");
+#else
     fout = stdout;
+#endif
     line = 0;
 
     fprintf(fout, " LDI 0xfe STA 0xffff\n");
     fprintf(fout, " LDI 0x00 PHS PHS\n");
-    fprintf(fout, " JPS main PLS PLS OUT\n");
-    fprintf(fout, " ___LOOP: JPA ___LOOP\n");
-    fprintf(fout, "___X: 0x00 0x00\n");
-    fprintf(fout, "___Y: 0x00 0x00\n");
-    fprintf(fout, "___Z: 0x00 0x00\n");
-    fprintf(fout, "___BP: 0x00 0xff\n");
+    fprintf(fout, " JPS main PLS OUT PLS\n");
+    fprintf(fout, "___LOOP: JPA ___LOOP\n");
+    fprintf(fout, ".X: 0x00 0x00\n");
+    fprintf(fout, ".Y: 0x00 0x00\n");
+    fprintf(fout, ".Z: 0x00 0x00\n");
     parse_unit();
 
 #if 1
     printf(";*** SYM ***\n");
     dumpsym();
     printf(";*** *** ***\n");
+#endif
+
+    fclose(fin);
+#ifdef GDB
+    fclose(fout);
 #endif
 
     return(0);

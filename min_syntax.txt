@@ -11,6 +11,8 @@ IF = 'if'
 ELSE = 'else'
 WHILE = 'while'
 
+CAST = 'cast'
+
 SPMEMB = '->'
 
 IDENT = [_A-Za-z][_A-Za-z0-9]*
@@ -36,6 +38,7 @@ INTLIT = [0-9]*
          | IDENT '.' IDENT
          | IDENT SPMEMB IDENT
          | '*' <lvalue>
+         | '(' <lvalue> ')'
 
 <decl> = VAR IDENT ':' <typespec>
 
@@ -50,5 +53,28 @@ INTLIT = [0-9]*
 
 <expr_base> = INTLIT
             | IDENT
+            | '(' <expr> ')'
 
-<expr> = <expr_base>
+<expr_first> = <expr_base> '(' ')'
+             | <expr_base> '[' <expr> ']'
+             | <expr_base> '.' IDENT
+             | <expr_base> SPMEMB IDENT
+             | <expr_base>
+
+<expr_unary> = '+' <expr_unary>
+             | '-' <expr_unary>
+             | '*' <expr_unary>
+             | '&' <expr_unary>
+             | CAST '<' <typespec> '>' <expr_first>
+             | <expr_first>
+
+<expr_mul> = <expr_mul> '*' <expr_unary>
+           | <expr_mul> '/' <expr_unary>
+           | <expr_mul> '%' <expr_unary>
+           | <expr_unary>
+
+<expr_add> = <expr_add> '+' <expr_mul>
+           | <expr_add> '-' <expr_mul>
+           | <expr_mul>
+
+<expr> = <expr_add>
