@@ -1229,6 +1229,7 @@ main(int argc, char *argv[])
                 {
                     halt = emu_exec(&emu);
                 }
+                tilbrk = 0;
             }
         }
         else
