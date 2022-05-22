@@ -51,11 +51,13 @@ INTLIT = [0-9]*
 
 <struct_def> = '{' (VAR IDENT ':' <typespec> ';')+ '}'
 
+<args> = <expr> (',' <expr>)*
+
 <expr_base> = INTLIT
             | IDENT
             | '(' <expr> ')'
 
-<expr_first> = <expr_base> '(' ')'
+<expr_first> = <expr_base> '(' <args>? ')'
              | <expr_base> '[' <expr> ']'
              | <expr_base> '.' IDENT
              | <expr_base> SPMEMB IDENT

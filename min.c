@@ -3,8 +3,12 @@
  *
  * [x] Expressions
  * [x] Functions
- * [x] Function call statements
- * [ ] Function call in expressions
+ * [x] Function calls
+ * [ ] Relational exprs
+ * [ ] if-else stmts
+ * [ ] while stmts
+ * [ ] Structs
+ * [ ] Arrays
  *
  */
 
@@ -506,6 +510,7 @@ enum
     EXPR_INTLIT,
     EXPR_ID,
 
+    EXPR_CALL,
     EXPR_ARR,
     EXPR_SMEMB,
     EXPR_SPMEMB,
@@ -538,6 +543,8 @@ Expr
     struct Expr *r;
 
     Type *type;
+
+    struct Expr *next;
 } Expr;
 
 Expr *
@@ -551,6 +558,7 @@ mkexprint(int val)
         res->type = 0;
         res->kind = EXPR_INTLIT;
         res->val = val;
+        res->next = 0;
     }
 
     return(res);
@@ -568,6 +576,7 @@ mkexprid(char *id)
         res->kind = EXPR_ID;
         strncpy(res->id, id, MAX_IDENT_LEN);
         res->id[MAX_IDENT_LEN] = 0;
+        res->next = 0;
     }
 
     return(res);
@@ -584,6 +593,7 @@ mkexprun(int kind, Expr *l)
         res->type = 0;
         res->kind = kind;
         res->l = l;
+        res->next = 0;
     }
 
     return(res);
@@ -599,6 +609,7 @@ mkexprcast(Type *cast, Expr *l)
     {
         res->type = 0;
         res->cast = cast;
+        res->next = 0;
     }
 
     return(res);
@@ -616,6 +627,7 @@ mkexprbin(int kind, Expr *l, Expr *r)
         res->kind = kind;
         res->l = l;
         res->r = r;
+        res->next = 0;
     }
 
     return(res);
@@ -639,14 +651,14 @@ resolve_lvalue(Expr *e)
 
         if(sym->kind == SYM_VAR)
         {
-            fprintf(fout, " LDI <%s STA .Z LDI >%s STA .Z+1\n", sym->name, sym->name);
+            fprintf(fout, " LDI <%s STA .Z.%s LDI >%s STA .Z.%s+1\n", sym->name, currfunc->name, sym->name, currfunc->name);
         }
         else if(sym->kind == SYM_VAR_LOC)
         {
-            fprintf(fout, " LDA ___BP_%s STA .Z LDA ___BP_%s+1 STA .Z+1\n", currfunc->name, currfunc->name);
+            fprintf(fout, " LDA .BP.%s STA .Z.%s LDA .BP.%s+1 STA .Z.%s+1\n", currfunc->name, currfunc->name, currfunc->name, currfunc->name);
             if(sym->offset != 0)
             {
-                fprintf(fout, " LDI %d ADW .Z\n", sym->offset);
+                fprintf(fout, " LDI %d ADW .Z.%s\n", sym->offset, currfunc->name);
             }
         }
         else
@@ -665,8 +677,8 @@ resolve_lvalue(Expr *e)
             fprintf(stderr, "Cannot dereference a non-pointer\n");
         }
 
-        fprintf(fout, " LDA .Z STA .X LDA .Z+1 STA .X+1\n");
-        fprintf(fout, " LDR .X STA .Z INW .X LDR .X STA .Z+1\n");
+        fprintf(fout, " LDA .Z.%s STA .X LDA .Z.%s+1 STA .X+1\n", currfunc->name, currfunc->name);
+        fprintf(fout, " LDR .X STA .Z.%s INW .X LDR .X STA .Z.%s+1\n", currfunc->name, currfunc->name);
 
         t = t->base;
     }
@@ -688,6 +700,9 @@ resolve_expr(Expr *e, Type *wanted)
     Type *lt;
     Type *rt;
     Sym *sym;
+    Expr *arg;
+    Sym *param;
+    int paramsz;
 
     assert(e);
 
@@ -743,18 +758,18 @@ resolve_expr(Expr *e, Type *wanted)
         }
         else if(sym->kind == SYM_VAR_LOC)
         {
-            fprintf(fout, " LDA ___BP_%s STA .Y LDA ___BP_%s+1 STA .Y+1\n", currfunc->name, currfunc->name);
+            fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n", currfunc->name, currfunc->name);
             if(sym->offset != 0)
             {
-                fprintf(fout, " LDI %d ADW .Y", sym->offset);
+                fprintf(fout, " LDI %d ADW .T", sym->offset);
             }
             if(t->width == 1)
             {
-                fprintf(fout, " LDA .Y STA .X\n");
+                fprintf(fout, " LDR .T STA .X\n");
             }
             else if(t->width == 2)
             {
-                fprintf(fout, " LDR .Y STA .X INW .Y LDR .Y STA .X+1\n");
+                fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
             }
             else
             {
@@ -766,6 +781,107 @@ resolve_expr(Expr *e, Type *wanted)
             fprintf(stderr, "Invalid var or const %s in expression\n", sym->name);
             assert(0);
         }
+    }
+    else if(e->kind == EXPR_CALL)
+    {
+        if(e->l->kind != EXPR_ID)
+        {
+            fprintf(stderr, "Invalid function call\n");
+            assert(0);
+        }
+
+        sym = lookup(e->l->id);
+        if(!sym || sym->kind != SYM_FUNC)
+        {
+            fprintf(stderr, "Cannot call a non-function\n");
+            assert(0);
+        }
+
+        paramsz = 0;
+        param = sym->params;
+        arg = e->r;
+        while(arg)
+        {
+            if(!param)
+            {
+                fprintf(stderr, "Invalid param for function %s\n", sym->name);
+                assert(0);
+            }
+
+            lt = resolve_expr(arg, param->type);
+            if(lt != param->type)
+            {
+                fprintf(stderr, "Function %s param type mismatch\n", sym->name);
+                assert(0);
+            }
+
+            fprintf(fout, " ;push param %s\n", param->name);
+            if(lt->width == 1)
+            {
+                fprintf(fout, " LDI 0 PHS LDA .X PHS\n");
+            }
+            else if(lt->width == 2)
+            {
+                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+            }
+            else
+            {
+                assert(0);
+            }
+
+            paramsz += ALIGN(lt->width, 2);
+            param = param->next;
+            arg = arg->next;
+        }
+
+        if(param)
+        {
+            fprintf(stderr, "Invalid num of arguments for function %s\n", sym->name);
+            assert(0);
+        }
+
+        if(sym->type->width > 0)
+        {
+            fprintf(fout, " ;reserve space for ret %s\n", sym->name);
+            fprintf(fout, " LDI %d SBB 0xffff\n", ALIGN(sym->type->width, 2));
+        }
+
+        fprintf(fout, " ;call %s\n", sym->name);
+        fprintf(fout, " JPS %s\n", sym->name);
+
+        if(sym->type->width > 0)
+        {
+            if(ALIGN(sym->type->width, 2) == 2)
+            {
+                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+            }
+            else
+            {
+                assert(0);
+            }
+        }
+
+        if(paramsz > 0)
+        {
+            fprintf(fout, " LDI %d ADB 0xffff\n", paramsz);
+        }
+
+        t = sym->type;
+    }
+    else if(e->kind == EXPR_ARR)
+    {
+        /* TODO: HERE */
+        assert(0);
+    }
+    else if(e->kind == EXPR_SMEMB)
+    {
+        /* TODO: HERE */
+        assert(0);
+    }
+    else if(e->kind == EXPR_SPMEMB)
+    {
+        /* TODO: HERE */
+        assert(0);
     }
     else if(e->kind == EXPR_NEG)
     {
@@ -783,9 +899,9 @@ resolve_expr(Expr *e, Type *wanted)
         }
         else if(t->width == 2)
         {
-            fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+            fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
             fprintf(fout, " LDI 0 STA .X STA .X+1\n");
-            fprintf(fout, " LDA .Y SBB .X LDA .Y+1 SCB .X+1\n");
+            fprintf(fout, " LDA .T SBB .X LDA .T+1 SCB .X+1\n");
         }
         else
         {
@@ -803,13 +919,13 @@ resolve_expr(Expr *e, Type *wanted)
 
         if(t->width == 1)
         {
-            fprintf(fout, " LDR .X STA .Y\n");
-            fprintf(fout, " LDA .Y STA .X\n");
+            fprintf(fout, " LDR .X STA .T\n");
+            fprintf(fout, " LDA .T STA .X\n");
         }
         else if(t->width == 2)
         {
-            fprintf(fout, " LDR .X STA .Y INW .X LDR .X STA .Y+1\n");
-            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
+            fprintf(fout, " LDR .X STA .T INW .X LDR .X STA .T+1\n");
+            fprintf(fout, " LDA .T STA .X LDA .T+1 STA .X+1\n");
         }
         else
         {
@@ -970,13 +1086,64 @@ parse_expr_base()
     return(e);
 }
 
-/* TODO: HERE */
 Expr *
 parse_expr_first()
 {
     Expr *e;
+    Expr *args;
+    Expr *arg;
+    int t;
 
     e = parse_expr_base();
+
+    t = peek();
+    if(t == '(')
+    {
+        args = 0;
+        arg = 0;
+        expect('(');
+        t = peek();
+        while(t != ')')
+        {
+            if(arg)
+            {
+                arg->next = parse_expr();
+                arg = arg->next;
+            }
+            else
+            {
+                arg = parse_expr();
+                args = arg;
+            }
+
+            t = peek();
+            if(t == ',')
+            {
+                next();
+                t = peek();
+            }
+        }
+        expect(')');
+
+        e = mkexprbin(EXPR_CALL, e, args);
+    }
+    else if(t == '[')
+    {
+        expect('[');
+        e = mkexprun(EXPR_ARR, parse_expr());
+        expect(']');
+        assert(0);
+    }
+    else if(t == '.')
+    {
+        /* TODO: HERE */
+        assert(0);
+    }
+    else if(t == SPMEMB)
+    {
+        /* TODO: HERE */
+        assert(0);
+    }
 
     return(e);
 }
@@ -1025,7 +1192,7 @@ parse_expr_unary()
     }
     else
     {
-        e = parse_expr_base();
+        e = parse_expr_first();
     }
 
     return(e);
@@ -1245,9 +1412,9 @@ parse_stmt()
         /* TODO: Check function return type compatibility */
 
         /* TODO: This based on return type width */
-        fprintf(fout, " LDA ___BP_%s STA .Z LDA ___BP_%s+1 STA .Z+1\n", currfunc->name, currfunc->name);
-        fprintf(fout, " LDI 3 ADW .Z\n");
-        fprintf(fout, " LDA .X STR .Z INW .Z LDA .X+1 STR .Z\n");
+        fprintf(fout, " LDA .BP.%s STA .Z.%s LDA .BP.%s+1 STA .Z.%s+1\n", currfunc->name, currfunc->name, currfunc->name, currfunc->name);
+        fprintf(fout, " LDI 3 ADW .Z.%s\n", currfunc->name);
+        fprintf(fout, " LDA .X STR .Z.%s INW .Z.%s LDA .X+1 STR .Z.%s\n", currfunc->name, currfunc->name, currfunc->name);
     }
     else if(t == '{')
     {
@@ -1361,12 +1528,12 @@ parse_stmt()
 
                 if(lt->width == 1)
                 {
-                    fprintf(fout, " LDA .X STR .Z\n");
+                    fprintf(fout, " LDA .X STR .Z.%s\n", currfunc->name);
                 }
                 else if(lt->width == 2)
                 {
-                    fprintf(fout, " LDA .X STR .Z\n");
-                    fprintf(fout, " INW .Z LDA .X+1 STR .Z\n");
+                    fprintf(fout, " LDA .X STR .Z.%s\n", currfunc->name);
+                    fprintf(fout, " INW .Z.%s LDA .X+1 STR .Z.%s\n", currfunc->name, currfunc->name);
                 }
                 else
                 {
@@ -1390,12 +1557,12 @@ parse_stmt()
 
             if(lt->width == 1)
             {
-                fprintf(fout, " LDA .X STR .Z\n");
+                fprintf(fout, " LDA .X STR .Z.%s\n", currfunc->name);
             }
             else if(lt->width == 2)
             {
-                fprintf(fout, " LDA .X STR .Z\n");
-                fprintf(fout, " INW .Z LDA .X+1 STR .Z\n");
+                fprintf(fout, " LDA .X STR .Z.%s\n", currfunc->name);
+                fprintf(fout, " INW .Z.%s LDA .X+1 STR .Z.%s\n", currfunc->name, currfunc->name);
             }
             else
             {
@@ -1452,7 +1619,7 @@ parse_glob_decl()
         sym->poffset = 3;
         currfunc = sym;
 
-        fprintf(fout, " LDA 0xffff STA ___BP_%s\n", currfunc->name);
+        fprintf(fout, " LDA 0xffff STA .BP.%s\n", currfunc->name);
 
         expect(':');
         type = parse_typespec();
@@ -1510,10 +1677,11 @@ parse_glob_decl()
 
         expect('}');
 
-        fprintf(fout, " LDA ___BP_%s STA 0xffff\n", currfunc->name);
+        fprintf(fout, " LDA .BP.%s STA 0xffff\n", currfunc->name);
         fprintf(fout, " RTS\n");
 
-        fprintf(fout, "___BP_%s: 0x00 0xff\n", currfunc->name);
+        fprintf(fout, ".BP.%s: 0x00 0xff\n", currfunc->name);
+        fprintf(fout, ".Z.%s: 0x00 0xff\n", currfunc->name);
 
         cut(currfunc);
     }
@@ -1556,7 +1724,7 @@ main()
     fprintf(fout, "___LOOP: JPA ___LOOP\n");
     fprintf(fout, ".X: 0x00 0x00\n");
     fprintf(fout, ".Y: 0x00 0x00\n");
-    fprintf(fout, ".Z: 0x00 0x00\n");
+    fprintf(fout, ".T: 0x00 0x00\n");
     parse_unit();
 
 #if 1
