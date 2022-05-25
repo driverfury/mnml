@@ -4,11 +4,16 @@
  * [x] Expressions
  * [x] Functions
  * [x] Function calls
+ * [x] Pointers
+ * [x] No need to ALIGN by 2
+ * [x] Structs
+ * [ ] Arrays
  * [ ] Relational exprs
  * [ ] if-else stmts
  * [ ] while stmts
- * [ ] Structs
- * [ ] Arrays
+ *
+ * BUG:
+ * [ ] Local variables (not params) don't work properly
  *
  */
 
@@ -26,6 +31,17 @@
 /**                      TYPES                     **/
 /****************************************************/
 
+typedef struct Type Type;
+
+typedef struct
+SMemb
+{
+    char name[MAX_IDENT_LEN+1];
+    Type *type;
+    int offset;
+    struct SMemb *next;
+} SMemb;
+
 enum
 {
     TYPE_VOID,
@@ -36,13 +52,14 @@ enum
     TYPE_STRUCT
 };
 
-typedef struct
+struct
 Type
 {
     int kind;
     int width;
-    struct Type *base;
-} Type;
+    Type *base;
+    SMemb *members;
+};
 
 Type _type_void = { TYPE_VOID, 0, 0 };
 Type _type_char = { TYPE_CHAR, 1, 0 };
@@ -64,6 +81,105 @@ Type *
 type_int()
 {
     return(&_type_int);
+}
+
+#define PTRS_CACHE_SIZE 100
+Type _type_ptrs[PTRS_CACHE_SIZE];
+int _type_ptrs_count;
+
+Type *
+type_ptr(Type *base)
+{
+    Type *t;
+    int i;
+
+    t = 0;
+    for(i = 0;
+        i < _type_ptrs_count;
+        ++i)
+    {
+        if(_type_ptrs[i].base == base)
+        {
+            t = &(_type_ptrs[i]);
+        }
+    }
+
+    if(!t)
+    {
+        t = &(_type_ptrs[_type_ptrs_count]);
+        ++_type_ptrs_count;
+
+        t->kind = TYPE_PTR;
+        t->width = 2;
+        t->base = base;
+    }
+
+    return(t);
+}
+
+SMemb *
+mksmemb(char *name, Type *type, int offset)
+{
+    SMemb *res;
+
+    res = (SMemb *)malloc(sizeof(SMemb));
+    if(res)
+    {
+        strncpy(res->name, name, MAX_IDENT_LEN);
+        res->name[MAX_IDENT_LEN] = 0;
+        res->type = type;
+        res->offset = offset;
+        res->next = 0;
+    }
+
+    return(res);
+}
+
+SMemb *
+getsmemb(Type *s, char *name)
+{
+    SMemb *res;
+    SMemb *m;
+
+    res = 0;
+    assert(s->kind == TYPE_STRUCT);
+
+    m = s->members;
+    while(m)
+    {
+        if(strcmp(m->name, name) == 0)
+        {
+            res = m;
+            break;
+        }
+        m = m->next;
+    }
+
+    return(res);
+}
+
+Type *
+type_struct(SMemb *members)
+{
+    Type *res;
+    SMemb *m;
+
+    res = (Type *)malloc(sizeof(Type));
+    if(res)
+    {
+        res->kind = TYPE_STRUCT;
+        res->width = 0;
+        res->members = members;
+
+        m = members;
+        while(m)
+        {
+            res->width += m->type->width;
+            m = m->next;
+        }
+    }
+
+    return(res);
 }
 
 void
@@ -291,6 +407,7 @@ addsym(char *name)
 
 FILE *fin;
 FILE *fout;
+FILE *flib;
 
 int line;
 char pback;
@@ -482,10 +599,22 @@ Type *
 parse_typespec()
 {
     Type *res;
+    Sym *sym;
     int t;
 
+    res = 0;
     t = next();
-    if(t == VOID)
+    if(t == IDENT)
+    {
+        sym = lookup(ident);
+        if(!sym || sym->kind != SYM_TYPE)
+        {
+            fprintf(stderr, "Invalid type %s\n", ident);
+            assert(0);
+        }
+        res = sym->type;
+    }
+    else if(t == VOID)
     {
         res = type_void();
     }
@@ -496,6 +625,11 @@ parse_typespec()
     else if(t == INT)
     {
         res = type_int();
+    }
+    else if(t == '[')
+    {
+        res = type_ptr(parse_typespec());
+        expect(']');
     }
     else
     {
@@ -633,11 +767,14 @@ mkexprbin(int kind, Expr *l, Expr *r)
     return(res);
 }
 
+Type *resolve_expr(Expr *e, Type *wanted);
+
 Type *
 resolve_lvalue(Expr *e)
 {
     Type *t;
     Sym *sym;
+    SMemb *memb;
 
     t = 0;
     if(e->kind == EXPR_ID)
@@ -651,14 +788,14 @@ resolve_lvalue(Expr *e)
 
         if(sym->kind == SYM_VAR)
         {
-            fprintf(fout, " LDI <%s STA .Z.%s LDI >%s STA .Z.%s+1\n", sym->name, currfunc->name, sym->name, currfunc->name);
+            fprintf(fout, " LDI <%s STA .X LDI >%s STA .X+1\n", sym->name, sym->name);
         }
         else if(sym->kind == SYM_VAR_LOC)
         {
-            fprintf(fout, " LDA .BP.%s STA .Z.%s LDA .BP.%s+1 STA .Z.%s+1\n", currfunc->name, currfunc->name, currfunc->name, currfunc->name);
+            fprintf(fout, " LDA .BP.%s STA .X LDA .BP.%s+1 STA .X+1\n", currfunc->name, currfunc->name);
             if(sym->offset != 0)
             {
-                fprintf(fout, " LDI %d ADW .Z.%s\n", sym->offset, currfunc->name);
+                fprintf(fout, " LDI %d ADW .X\n", sym->offset);
             }
         }
         else
@@ -677,10 +814,71 @@ resolve_lvalue(Expr *e)
             fprintf(stderr, "Cannot dereference a non-pointer\n");
         }
 
-        fprintf(fout, " LDA .Z.%s STA .X LDA .Z.%s+1 STA .X+1\n", currfunc->name, currfunc->name);
-        fprintf(fout, " LDR .X STA .Z.%s INW .X LDR .X STA .Z.%s+1\n", currfunc->name, currfunc->name);
+        fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
+        fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
 
         t = t->base;
+    }
+    else if(e->kind == EXPR_SMEMB)
+    {
+        t = resolve_lvalue(e->l);
+        if(t->kind != TYPE_STRUCT)
+        {
+            fprintf(stderr, "Cannot access a member of a non-struct\n");
+            assert(0);
+        }
+
+        if(e->r->kind != EXPR_ID)
+        {
+            fprintf(stderr, "Invalid struct member access\n");
+            assert(0);
+        }
+
+        memb = getsmemb(t, e->r->id);
+        if(!memb)
+        {
+            fprintf(stderr, "Invalid struct member %s\n", e->r->id);
+            assert(0);
+        }
+
+        if(memb->offset != 0)
+        {
+            assert(memb->offset > 0 && memb->offset < 256);
+            fprintf(fout, " LDI %d ADW .X\n", memb->offset);
+        }
+
+        t = memb->type;
+    }
+    else if(e->kind == EXPR_SPMEMB)
+    {
+        t = resolve_expr(e->l, 0);
+        if(t->kind != TYPE_PTR || t->base->kind != TYPE_STRUCT)
+        {
+            fprintf(stderr, "Cannot access a member of a non-struct\n");
+            assert(0);
+        }
+
+        if(e->r->kind != EXPR_ID)
+        {
+            fprintf(stderr, "Invalid struct member access\n");
+            assert(0);
+        }
+
+        t = t->base;
+        memb = getsmemb(t, e->r->id);
+        if(!memb)
+        {
+            fprintf(stderr, "Invalid struct member %s\n", e->r->id);
+            assert(0);
+        }
+
+        if(memb->offset != 0)
+        {
+            assert(memb->offset > 0 && memb->offset < 256);
+            fprintf(fout, " LDI %d ADW .X\n", memb->offset);
+        }
+
+        t = memb->type;
     }
     else
     {
@@ -703,6 +901,7 @@ resolve_expr(Expr *e, Type *wanted)
     Expr *arg;
     Sym *param;
     int paramsz;
+    SMemb *memb;
 
     assert(e);
 
@@ -745,7 +944,7 @@ resolve_expr(Expr *e, Type *wanted)
         {
             if(t->width == 1)
             {
-                fprintf(fout, " LDA %s STA .X\n", sym->name);
+                fprintf(fout, " LDA %s STA .X LDI 0 STA .X+1\n", sym->name);
             }
             else if(t->width == 2)
             {
@@ -758,7 +957,9 @@ resolve_expr(Expr *e, Type *wanted)
         }
         else if(sym->kind == SYM_VAR_LOC)
         {
-            fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n", currfunc->name, currfunc->name);
+            /* TODO: Maybe we can use LDS */
+            fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n",
+                currfunc->name, currfunc->name);
             if(sym->offset != 0)
             {
                 fprintf(fout, " LDI %d ADW .T", sym->offset);
@@ -797,6 +998,12 @@ resolve_expr(Expr *e, Type *wanted)
             assert(0);
         }
 
+        if(sym->type->width > 0)
+        {
+            fprintf(fout, " ;reserve space for ret %s\n", sym->name);
+            fprintf(fout, " LDI %d SBB 0xffff\n", sym->type->width);
+        }
+
         paramsz = 0;
         param = sym->params;
         arg = e->r;
@@ -829,7 +1036,7 @@ resolve_expr(Expr *e, Type *wanted)
                 assert(0);
             }
 
-            paramsz += ALIGN(lt->width, 2);
+            paramsz += lt->width;
             param = param->next;
             arg = arg->next;
         }
@@ -840,30 +1047,29 @@ resolve_expr(Expr *e, Type *wanted)
             assert(0);
         }
 
-        if(sym->type->width > 0)
-        {
-            fprintf(fout, " ;reserve space for ret %s\n", sym->name);
-            fprintf(fout, " LDI %d SBB 0xffff\n", ALIGN(sym->type->width, 2));
-        }
-
         fprintf(fout, " ;call %s\n", sym->name);
         fprintf(fout, " JPS %s\n", sym->name);
 
+        if(paramsz > 0)
+        {
+            fprintf(fout, " LDI %d ADB 0xffff\n", paramsz);
+        }
+
         if(sym->type->width > 0)
         {
-            if(ALIGN(sym->type->width, 2) == 2)
+            if(sym->type->width == 1)
+            {
+                fprintf(fout, " PLS STA .X\n");
+            }
+            else if(sym->type->width == 2)
             {
                 fprintf(fout, " PLS STA .X PLS STA .X+1\n");
             }
             else
             {
+                /* TODO: What if the return type size is > 2? */
                 assert(0);
             }
-        }
-
-        if(paramsz > 0)
-        {
-            fprintf(fout, " LDI %d ADB 0xffff\n", paramsz);
         }
 
         t = sym->type;
@@ -875,13 +1081,91 @@ resolve_expr(Expr *e, Type *wanted)
     }
     else if(e->kind == EXPR_SMEMB)
     {
-        /* TODO: HERE */
-        assert(0);
+        lt = resolve_lvalue(e->l);
+        if(lt->kind != TYPE_STRUCT)
+        {
+            fprintf(stderr, "Cannot access a member of a non-struct\n");
+            assert(0);
+        }
+
+        if(e->r->kind != EXPR_ID)
+        {
+            fprintf(stderr, "Invalid struct member access\n");
+            assert(0);
+        }
+
+        memb = getsmemb(lt, e->r->id);
+        if(!memb)
+        {
+            fprintf(stderr, "Invalid struct member %s\n", e->r->id);
+            assert(0);
+        }
+
+        if(memb->offset != 0)
+        {
+            assert(memb->offset > 0 && memb->offset < 256);
+            fprintf(fout, " LDI %d ADW .X\n", memb->offset);
+        }
+        fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
+
+        if(memb->type->width == 1)
+        {
+            fprintf(fout, " LDR .T STA .X\n");
+        }
+        else if(memb->type->width == 2)
+        {
+            fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
+        }
+        else
+        {
+            assert(0);
+        }
+
+        t = memb->type;
     }
     else if(e->kind == EXPR_SPMEMB)
     {
-        /* TODO: HERE */
-        assert(0);
+        lt = resolve_expr(e->l, 0);
+        if(lt->kind != TYPE_PTR || lt->base->kind != TYPE_STRUCT)
+        {
+            fprintf(stderr, "Cannot access a member of a non-struct-ptr\n");
+            assert(0);
+        }
+
+        if(e->r->kind != EXPR_ID)
+        {
+            fprintf(stderr, "Invalid struct member access\n");
+            assert(0);
+        }
+
+        memb = getsmemb(lt->base, e->r->id);
+        if(!memb)
+        {
+            fprintf(stderr, "Invalid struct member %s\n", e->r->id);
+            assert(0);
+        }
+
+        if(memb->offset != 0)
+        {
+            assert(memb->offset > 0 && memb->offset < 256);
+            fprintf(fout, " LDI %d ADW .X\n", memb->offset);
+        }
+        fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
+
+        if(memb->type->width == 1)
+        {
+            fprintf(fout, " LDR .T STA .X\n");
+        }
+        else if(memb->type->width == 2)
+        {
+            fprintf(fout, " LDR .T STA .X INW .T LDT .T STA .X+1\n");
+        }
+        else
+        {
+            assert(0);
+        }
+
+        t = memb->type;
     }
     else if(e->kind == EXPR_NEG)
     {
@@ -934,8 +1218,8 @@ resolve_expr(Expr *e, Type *wanted)
     }
     else if(e->kind == EXPR_ADR)
     {
-        /* TODO: HERE */
-        assert(0);
+        lt = resolve_lvalue(e->l);
+        t = type_ptr(lt);
     }
     else if(e->kind == EXPR_CST)
     {
@@ -947,6 +1231,9 @@ resolve_expr(Expr *e, Type *wanted)
             if( (lt == type_char() && t == type_int()) ||
                 (lt == type_int() && t == type_char()))
             {
+                /* TODO: NOTE: This is not always correct. If the number is
+                 * negative and you cast from char to int, the MSB must be 0xff
+                 */
                 fprintf(fout, " LDI 0 STA .X+1\n");
             }
             else if(lt->kind == TYPE_PTR && t->kind == TYPE_PTR)
@@ -976,24 +1263,68 @@ resolve_expr(Expr *e, Type *wanted)
     }
     else if(e->kind == EXPR_ADD)
     {
-        /* TODO: Pointer aithmetic */
         lt = resolve_expr(e->l, 0);
         fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
         rt = resolve_expr(e->r, lt);
-        if( (lt != type_char() && lt != type_int()) ||
-            (rt != type_char() && rt != type_int()))
-        {
-            fprintf(stderr, "Cannot add a non-arithmetic type\n");
-            assert(0);
-        }
 
-        if(lt == type_char() && rt == type_char())
+        if(lt->kind == TYPE_PTR || rt->kind == TYPE_PTR)
         {
-            t = type_char();
+            if(lt->kind == TYPE_PTR && (rt == type_char() || rt == type_int()))
+            {
+                t = lt;
+
+                if(lt->base->width == 0)
+                {
+                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
+                    assert(0);
+                }
+
+                assert(lt->base->width > 0 && lt->base->width < 256);
+                fprintf(fout, " PHS PHS\n");
+                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+            }
+            else if(rt->kind == TYPE_PTR && (lt == type_char() || lt == type_int()))
+            {
+                t = rt;
+
+                if(rt->base->width == 0)
+                {
+                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
+                    assert(0);
+                }
+
+                assert(rt->base->width > 0 && rt->base->width < 256);
+                fprintf(fout, " PHS PHS\n");
+                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+            }
+            else
+            {
+                fprintf(stderr, "Invalid pointer arithmetic\n");
+                assert(0);
+            }
+        }
+        else if((lt == type_char() || lt == type_int()) &&
+                (rt == type_char() || rt == type_int()))
+        {
+            if(lt == type_char() && rt == type_char())
+            {
+                t = type_char();
+            }
+            else
+            {
+                t = type_int();
+            }
         }
         else
         {
-            t = type_int();
+            fprintf(stderr, "Cannot add a non-arithmetic type\n");
+            assert(0);
         }
 
         if(t->width == 1)
@@ -1011,24 +1342,68 @@ resolve_expr(Expr *e, Type *wanted)
     }
     else if(e->kind == EXPR_SUB)
     {
-        /* TODO: Pointer aithmetic */
         lt = resolve_expr(e->l, 0);
         fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
         rt = resolve_expr(e->r, lt);
-        if( (lt != type_char() && lt != type_int()) ||
-            (rt != type_char() && rt != type_int()))
-        {
-            fprintf(stderr, "Cannot add a non-arithmetic type\n");
-            assert(0);
-        }
 
-        if(lt == type_char() && rt == type_char())
+        if(lt->kind == TYPE_PTR || rt->kind == TYPE_PTR)
         {
-            t = type_char();
+            if(lt->kind == TYPE_PTR && (rt == type_char() || rt == type_int()))
+            {
+                t = lt;
+
+                if(lt->base->width == 0)
+                {
+                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
+                    assert(0);
+                }
+
+                assert(lt->base->width > 0 && lt->base->width < 256);
+                fprintf(fout, " PHS PHS\n");
+                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+            }
+            else if(rt->kind == TYPE_PTR && (lt == type_char() || lt == type_int()))
+            {
+                t = rt;
+
+                if(rt->base->width == 0)
+                {
+                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
+                    assert(0);
+                }
+
+                assert(rt->base->width > 0 && rt->base->width < 256);
+                fprintf(fout, " PHS PHS\n");
+                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+            }
+            else
+            {
+                fprintf(stderr, "Invalid pointer arithmetic\n");
+                assert(0);
+            }
+        }
+        else if((lt == type_char() || lt == type_int()) &&
+                (rt == type_char() || rt == type_int()))
+        {
+            if(lt == type_char() && rt == type_char())
+            {
+                t = type_char();
+            }
+            else
+            {
+                t = type_int();
+            }
         }
         else
         {
-            t = type_int();
+            fprintf(stderr, "Cannot add a non-arithmetic type\n");
+            assert(0);
         }
 
         if(t->width == 1)
@@ -1130,19 +1505,20 @@ parse_expr_first()
     else if(t == '[')
     {
         expect('[');
-        e = mkexprun(EXPR_ARR, parse_expr());
+        e = mkexprbin(EXPR_ARR, e, parse_expr());
         expect(']');
-        assert(0);
     }
     else if(t == '.')
     {
-        /* TODO: HERE */
-        assert(0);
+        expect('.');
+        expect(IDENT);
+        e = mkexprbin(EXPR_SMEMB, e, mkexprid(ident));
     }
     else if(t == SPMEMB)
     {
-        /* TODO: HERE */
-        assert(0);
+        expect(SPMEMB);
+        expect(IDENT);
+        e = mkexprbin(EXPR_SPMEMB, e, mkexprid(ident));
     }
 
     return(e);
@@ -1293,11 +1669,11 @@ parse_decl(int param)
         if(param)
         {
             sym->offset = currfunc->poffset;
-            currfunc->poffset += ALIGN(type->width, 2);
+            currfunc->poffset += type->width;
         }
         else
         {
-            currfunc->offset -= ALIGN(type->width, 2);
+            currfunc->offset -= type->width;
             sym->offset = currfunc->offset;
         }
     }
@@ -1411,10 +1787,11 @@ parse_stmt()
 
         /* TODO: Check function return type compatibility */
 
-        /* TODO: This based on return type width */
-        fprintf(fout, " LDA .BP.%s STA .Z.%s LDA .BP.%s+1 STA .Z.%s+1\n", currfunc->name, currfunc->name, currfunc->name, currfunc->name);
-        fprintf(fout, " LDI 3 ADW .Z.%s\n", currfunc->name);
-        fprintf(fout, " LDA .X STR .Z.%s INW .Z.%s LDA .X+1 STR .Z.%s\n", currfunc->name, currfunc->name, currfunc->name);
+        /* TODO: This should be based on return type width */
+        fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n",
+            currfunc->name, currfunc->name);
+        fprintf(fout, " LDI %d ADW .T\n", currfunc->poffset);
+        fprintf(fout, " LDA .X STR .T INW .T LDA .X+1 STR .T\n");
     }
     else if(t == '{')
     {
@@ -1446,6 +1823,14 @@ parse_stmt()
                 }
 
                 paramsz = 0;
+
+                if(sym->type->width > 0)
+                {
+                    fprintf(fout, " ;reserve space for ret %s\n", sym->name);
+                    fprintf(fout, " LDI %d SBB 0xffff\n", sym->type->width);
+                    paramsz += sym->type->width;
+                }
+
                 param = sym->params;
                 expect('(');
                 t = peek();
@@ -1479,7 +1864,7 @@ parse_stmt()
                         assert(0);
                     }
 
-                    paramsz += ALIGN(lt->width, 2);
+                    paramsz += lt->width;
                 
                     param = param->next;
 
@@ -1499,13 +1884,6 @@ parse_stmt()
 
                 expect(')');
 
-                if(sym->type->width > 0)
-                {
-                    fprintf(fout, " ;reserve space for ret %s\n", sym->name);
-                    fprintf(fout, " LDI %d SBB 0xffff\n", ALIGN(sym->type->width, 2));
-                    paramsz += ALIGN(sym->type->width, 2);
-                }
-
                 fprintf(fout, " ;call %s\n", sym->name);
                 fprintf(fout, " JPS %s\n", sym->name);
                 if(paramsz > 0)
@@ -1518,6 +1896,8 @@ parse_stmt()
                 e = parse_lvalue(buff);
                 expect('=');
                 lt = resolve_lvalue(e);
+                fprintf(fout, " LDA .X STA .Z.%s LDA .X+1 STA .Z.%s+1\n",
+                    currfunc->name, currfunc->name);
                 rt = resolve_expr(parse_expr(), lt);
 
                 if(lt != rt)
@@ -1547,6 +1927,8 @@ parse_stmt()
             e = parse_lvalue(0);
             expect('=');
             lt = resolve_lvalue(e);
+            fprintf(fout, " LDA .X STA .Z.%s LDA .X+1 STA .Z.%s+1\n",
+                currfunc->name, currfunc->name);
             rt = resolve_expr(parse_expr(), lt);
 
             if(lt != rt)
@@ -1585,6 +1967,9 @@ parse_glob_decl()
     Sym *params;
     Sym *param;
     Sym *tmp;
+    SMemb *members;
+    SMemb *memb;
+    char buff[MAX_IDENT_LEN+1];
 
     t = next();
     if(t == VAR)
@@ -1623,10 +2008,6 @@ parse_glob_decl()
 
         expect(':');
         type = parse_typespec();
-        if(type->width > 0)
-        {
-            sym->poffset += ALIGN(type->width, 2);
-        }
         sym->type = type;
         expect(';');
 
@@ -1687,11 +2068,73 @@ parse_glob_decl()
     }
     else if(t == STRUCT)
     {
-        /* TODO */
-        assert(0);
+        expect(IDENT);
+        sym = addsym(ident);
+        sym->kind = SYM_TYPE;
+        sym->type = type_struct(0);
+
+        expect('{');
+
+        i = 0;
+        t = peek();
+        while(t != '}')
+        {
+            expect(IDENT);
+            strncpy(buff, ident, MAX_IDENT_LEN);
+            buff[MAX_IDENT_LEN] = 0;
+
+            expect(':');
+
+            type = parse_typespec();
+
+            /**
+             * NOTE: This avoids cyclic dependency (parent struct as member or a
+             * void variable).
+             *
+             */
+            if(type == 0)
+            {
+                fprintf(stderr, "Invalid member %s in struct %s\n", buff, sym->name);
+                assert(0);
+            }
+
+            if(memb)
+            {
+                memb->next = mksmemb(buff, type, i);
+                memb = memb->next;
+            }
+            else
+            {
+                memb = mksmemb(buff, type, i);
+                members = memb;
+            }
+            i += type->width;
+
+            expect(';');
+
+            t = peek();
+        }
+
+        if(!members)
+        {
+            fprintf(stderr, "Cannot declare a void struct\n");
+            assert(0);
+        }
+
+        expect('}');
+
+        sym->type->members = members;
+        memb = sym->type->members;
+        while(memb)
+        {
+            sym->type->width += memb->type->width;
+            memb = memb->next;
+        }
     }
     else
     {
+        fprintf(stderr, "Invalid global decl\n");
+        fprintf(stderr, "T: %d\n", t);
         assert(0);
     }
 }
@@ -1707,9 +2150,17 @@ parse_unit()
     expect(END);
 }
 
+void
+regmul(char *x, char *y)
+{
+    fprintf(fout, " LDA X");
+}
+
 int
 main()
 {
+    int i;
+
     fin = fopen("test.min", "r");
 #ifdef GDB
     fout = fopen("test.asm", "w");
@@ -1717,6 +2168,22 @@ main()
     fout = stdout;
 #endif
     line = 0;
+
+    /* std lib */
+#if 1
+    flib = fopen("minlib.asm", "r");
+    while(!feof(flib))
+    {
+        i = fgetc(flib);
+        if(i >= 0)
+        {
+            fputc(i, fout);
+        }
+    }
+    fputc('\n', fout);
+    fclose(flib);
+#else
+#endif
 
     fprintf(fout, " LDI 0xfe STA 0xffff\n");
     fprintf(fout, " LDI 0x00 PHS PHS\n");

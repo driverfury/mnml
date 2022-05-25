@@ -1,3 +1,12 @@
+/**
+ * TODO:
+ *
+ * DEBUG MODE:
+ *   [ ] command = '\n' => repeat the previous instruction
+ *   [ ] Next instruction: like single step but it skips JPS
+ *   [ ] Symbols file (like pdb)?
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -7,6 +16,7 @@
 
 typedef uint8_t  u8;
 typedef uint16_t u16;
+typedef uint32_t u32;
 
 #define ZERO_BIT 1
 #define CARRY_BIT 2
@@ -42,10 +52,16 @@ emu_set_flags(Emu *emu, u16 ans)
 }
 
 void
-emu_set_flags16(Emu *emu, u16 ans)
+emu_set_flags16(Emu *emu, u32 ans)
 {
     u8 f = emu->flags;
 
+    if((ans & 0xffff) == 0) { f |= ZERO_BIT; } else { f &= ~ZERO_BIT; }
+    if(ans > 0xffff)        { f |= CARRY_BIT; } else { f &= ~CARRY_BIT; }
+    if(ans & 0x8000)        { f |= NEG_BIT; } else { f &= ~NEG_BIT; }
+
+    /* TODO: Why did I previously write this code? */
+#if 0
     if(ans & 0x8000)
     {
         f |= ZERO_BIT;
@@ -58,6 +74,7 @@ emu_set_flags16(Emu *emu, u16 ans)
         f &= ~CARRY_BIT;
         f &= ~NEG_BIT;
     }
+#endif
 
     emu->flags = f;
 }
@@ -153,6 +170,7 @@ emu_exec(Emu *emu)
     int halt;
     u8 opc;
     u16 ans;
+    u32 ans32;
     u16 addr;
     u8 op, op2;
 
@@ -621,68 +639,68 @@ emu_exec(Emu *emu)
         case 0x2e:
         {
             addr = FETCH16();
-            ans = emu_mem_read16(emu, addr);
-            ans = ans + 1;
-            SET_FLAGS16(ans);
-            emu_mem_write16(emu, ans, addr);
+            ans32 = (u32)emu_mem_read16(emu, addr);
+            ans32 = ans32 + 1;
+            SET_FLAGS16(ans32);
+            emu_mem_write16(emu, (u16)ans32, addr);
         } break;
 
         /* DEW */
         case 0x2f:
         {
             addr = FETCH16();
-            ans = emu_mem_read16(emu, addr);
-            ans = ans - 1;
-            SET_FLAGS16(ans);
-            emu_mem_write16(emu, ans, addr);
+            ans32 = (u32)emu_mem_read16(emu, addr);
+            ans32 = ans32 - 1;
+            SET_FLAGS16(ans32);
+            emu_mem_write16(emu, (u16)ans32, addr);
         } break;
 
         /* ADW */
         case 0x30:
         {
             addr = FETCH16();
-            ans = emu_mem_read16(emu, addr);
-            ans = ans + emu->a;
-            SET_FLAGS16(ans);
-            emu_mem_write16(emu, ans, addr);
+            ans32 = (u32)emu_mem_read16(emu, addr);
+            ans32 = ans32 + (u32)emu->a;
+            SET_FLAGS16(ans32);
+            emu_mem_write16(emu, (u16)ans32, addr);
         } break;
 
         /* SBW */
         case 0x31:
         {
             addr = FETCH16();
-            ans = emu_mem_read16(emu, addr);
-            ans = ans - emu->a;
-            SET_FLAGS16(ans);
-            emu_mem_write16(emu, ans, addr);
+            ans32 = (u32)emu_mem_read16(emu, addr);
+            ans32 = ans32 - (u32)emu->a;
+            SET_FLAGS16(ans32);
+            emu_mem_write16(emu, (u16)ans32, addr);
         } break;
 
         /* ACW */
         case 0x32:
         {
             addr = FETCH16();
-            ans = emu_mem_read16(emu, addr);
-            ans = ans + emu->a;
+            ans32 = (u32)emu_mem_read16(emu, addr);
+            ans32 = ans32 + (u32)emu->a;
             if(CARRY_BIT_IS_SET())
             {
-                ans += 1;
+                ans32 += 1;
             }
-            SET_FLAGS16(ans);
-            emu_mem_write16(emu, ans, addr);
+            SET_FLAGS16(ans32);
+            emu_mem_write16(emu, (u16)ans32, addr);
         } break;
 
         /* SCW */
         case 0x33:
         {
             addr = FETCH16();
-            ans = emu_mem_read16(emu, addr);
-            ans = ans - emu->a;
+            ans32 = (u32)emu_mem_read16(emu, addr);
+            ans32 = ans32 - (u32)emu->a;
             if(CARRY_BIT_IS_SET())
             {
-                ans -= 1;
+                ans32 -= 1;
             }
-            SET_FLAGS16(ans);
-            emu_mem_write16(emu, ans, addr);
+            SET_FLAGS16(ans32);
+            emu_mem_write16(emu, (u16)ans32, addr);
         } break;
 
         /* LDS */
@@ -795,10 +813,13 @@ emu_exec(Emu *emu)
         default:
         {
             halt = 1;
+            fprintf(stderr, "Invalid instruction %02x at %04x\n", opc, emu->pc-1);
             assert(0);
         } break;
     }
 
+#undef GET_SP16
+#undef GET_SP
 #undef NEG_BIT_IS_SET
 #undef CARRY_BIT_IS_SET
 #undef ZERO_BIT_IS_SET
@@ -1120,6 +1141,38 @@ isbrk(u16 addr)
     return(res);
 }
 
+#define FBRK_MAX_COUNT 100
+u16 fbrk[BRK_MAX_COUNT];
+int fbrkcount;
+
+void
+setfbrk(u16 addr)
+{
+    fbrk[fbrkcount % BRK_MAX_COUNT] = addr;
+    fbrkcount = (fbrkcount + 1) % BRK_MAX_COUNT;
+}
+
+int
+isfbrk(u16 addr)
+{
+    int res;
+    int i;
+
+    res = 0;
+    for(i = 0;
+        i < fbrkcount;
+        ++i)
+    {
+        if(fbrk[i] == addr)
+        {
+            res = 1;
+            break;
+        }
+    }
+
+    return(res);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -1193,7 +1246,7 @@ main(int argc, char *argv[])
                 (int)((int)0xff00 + ((int)emu.mem_read(0xffff))));
 
             c = getchar();
-            while(c != 's' && c != 'c')
+            while(c != 's' && c != 'c' && c != 'n')
             {
                 if(c == 'm')
                 {
@@ -1219,18 +1272,40 @@ main(int argc, char *argv[])
             {
                 tilbrk = 1;
             }
+            else if(c == 'n' && (emu_mem_read(emu.pc) == (u8)0x38))
+            {
+                setfbrk(emu.pc + 3);
+                halt = emu_exec(&emu);
+                if(tilbrk)
+                {
+                    while(!halt && !isbrk(emu.pc) && !isfbrk(emu.pc))
+                    {
+                        halt = emu_exec(&emu);
+                    }
+                    tilbrk = 0;
+                }
+                else
+                {
+                    while(!halt && !isfbrk(emu.pc))
+                    {
+                        halt = emu_exec(&emu);
+                    }
+                }
+            }
+            else
+            {
+                halt = emu_exec(&emu);
+                if(tilbrk)
+                {
+                    while(!halt && !isbrk(emu.pc))
+                    {
+                        halt = emu_exec(&emu);
+                    }
+                    tilbrk = 0;
+                }
+            }
 
             clrin();
-
-            halt = emu_exec(&emu);
-            if(tilbrk)
-            {
-                while(!halt && !isbrk(emu.pc))
-                {
-                    halt = emu_exec(&emu);
-                }
-                tilbrk = 0;
-            }
         }
         else
         {

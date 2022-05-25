@@ -49,7 +49,7 @@ INTLIT = [0-9]*
            | '[' typespec ']'
            | <typespec> '[' <expr> ']'
 
-<struct_def> = '{' (VAR IDENT ':' <typespec> ';')+ '}'
+<struct_def> = '{' (IDENT ':' <typespec> ';')+ '}'
 
 <args> = <expr> (',' <expr>)*
 
