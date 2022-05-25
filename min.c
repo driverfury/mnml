@@ -58,6 +58,7 @@ Type
     int kind;
     int width;
     Type *base;
+    int len; /* array length */
     SMemb *members;
 };
 
@@ -112,6 +113,41 @@ type_ptr(Type *base)
         t->kind = TYPE_PTR;
         t->width = 2;
         t->base = base;
+    }
+
+    return(t);
+}
+
+#define ARR_CACHE_SIZE 100
+Type _type_arr[ARR_CACHE_SIZE];
+int _type_arr_count;
+
+Type *
+type_array(Type *base, int len)
+{
+    Type *t;
+    int i;
+
+    t = 0;
+    for(i = 0;
+        i < _type_arr_count;
+        ++i)
+    {
+        if(_type_arr[i].base == base && _type_arr[i].len == len)
+        {
+            t = &(_type_arr[i]);
+        }
+    }
+
+    if(!t)
+    {
+        t = &(_type_arr[_type_arr_count]);
+        ++_type_arr_count;
+
+        t->kind = TYPE_ARR;
+        t->base = base;
+        t->len = len;
+        t->width = base->width*len;
     }
 
     return(t);
@@ -595,50 +631,6 @@ expect(int exp)
 
 Sym *currfunc;
 
-Type *
-parse_typespec()
-{
-    Type *res;
-    Sym *sym;
-    int t;
-
-    res = 0;
-    t = next();
-    if(t == IDENT)
-    {
-        sym = lookup(ident);
-        if(!sym || sym->kind != SYM_TYPE)
-        {
-            fprintf(stderr, "Invalid type %s\n", ident);
-            assert(0);
-        }
-        res = sym->type;
-    }
-    else if(t == VOID)
-    {
-        res = type_void();
-    }
-    else if(t == CHAR)
-    {
-        res = type_char();
-    }
-    else if(t == INT)
-    {
-        res = type_int();
-    }
-    else if(t == '[')
-    {
-        res = type_ptr(parse_typespec());
-        expect(']');
-    }
-    else
-    {
-        assert(0);
-    }
-
-    return(res);
-}
-
 enum
 {
     EXPR_INTLIT,
@@ -767,12 +759,90 @@ mkexprbin(int kind, Expr *l, Expr *r)
     return(res);
 }
 
+Expr *parse_expr();
+
+int
+evalexpr(Expr *e)
+{
+    int val;
+
+    val = 0;
+    if(e->kind == EXPR_INTLIT)
+    {
+        val = e->val;
+    }
+    else
+    {
+        fprintf(stderr, "Invalid constant expression\n");
+        assert(0);
+    }
+
+    return(val);
+}
+
+Type *
+parse_typespec()
+{
+    Type *res;
+    Sym *sym;
+    int t;
+    int len;
+
+    res = 0;
+    t = next();
+    if(t == IDENT)
+    {
+        sym = lookup(ident);
+        if(!sym || sym->kind != SYM_TYPE)
+        {
+            fprintf(stderr, "Invalid type %s\n", ident);
+            assert(0);
+        }
+        res = sym->type;
+    }
+    else if(t == VOID)
+    {
+        res = type_void();
+    }
+    else if(t == CHAR)
+    {
+        res = type_char();
+    }
+    else if(t == INT)
+    {
+        res = type_int();
+    }
+    else if(t == '[')
+    {
+        res = type_ptr(parse_typespec());
+        expect(']');
+    }
+    else
+    {
+        assert(0);
+    }
+
+    t = peek();
+    if(t == '[')
+    {
+        expect('[');
+        len = evalexpr(parse_expr());
+        expect(']');
+
+        res = type_array(res, len);
+    }
+
+    return(res);
+}
+
 Type *resolve_expr(Expr *e, Type *wanted);
 
 Type *
 resolve_lvalue(Expr *e)
 {
     Type *t;
+    Type *lt;
+    Type *rt;
     Sym *sym;
     SMemb *memb;
 
@@ -818,6 +888,35 @@ resolve_lvalue(Expr *e)
         fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
 
         t = t->base;
+    }
+    else if(e->kind == EXPR_ARR)
+    {
+        lt = resolve_lvalue(e->l);
+        if(lt->kind != TYPE_ARR && lt->kind != TYPE_PTR)
+        {
+            fprintf(stderr, "Invalid array subscription\n");
+            assert(0);
+        }
+        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+
+        rt = resolve_expr(e->r, type_int());
+        if(rt != type_int())
+        {
+            fprintf(stderr, "Invalid array subscription\n");
+            assert(0);
+        }
+
+        assert(lt->base->width > 0 && lt->base->width < 256);
+        fprintf(fout, " PHS PHS\n");
+        fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+        fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+        fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+
+        fprintf(fout, " LDA .X ADB .Y LDA .X+1 ACB .Y+1\n");
+        fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
+
+        t = lt->base;
     }
     else if(e->kind == EXPR_SMEMB)
     {
@@ -1076,8 +1175,44 @@ resolve_expr(Expr *e, Type *wanted)
     }
     else if(e->kind == EXPR_ARR)
     {
-        /* TODO: HERE */
-        assert(0);
+        lt = resolve_lvalue(e->l);
+        if(lt->kind != TYPE_ARR && lt->kind != TYPE_PTR)
+        {
+            fprintf(stderr, "Invalid array subscription\n");
+            assert(0);
+        }
+        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+
+        rt = resolve_expr(e->r, type_int());
+        if(rt != type_int())
+        {
+            fprintf(stderr, "Invalid array subscription\n");
+            assert(0);
+        }
+
+        assert(lt->base->width > 0 && lt->base->width < 256);
+        fprintf(fout, " PHS PHS\n");
+        fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+        fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+        fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+
+        fprintf(fout, " LDA .X ADB .Y LDA .X+1 ACB .Y+1\n");
+        fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
+
+        t = lt->base;
+        if(t->width == 1)
+        {
+            fprintf(fout, " LDR .T STA .X\n");
+        }
+        else if(t->width == 2)
+        {
+            fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
+        }
+        else
+        {
+            assert(0);
+        }
     }
     else if(e->kind == EXPR_SMEMB)
     {
@@ -1106,8 +1241,8 @@ resolve_expr(Expr *e, Type *wanted)
             assert(memb->offset > 0 && memb->offset < 256);
             fprintf(fout, " LDI %d ADW .X\n", memb->offset);
         }
-        fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
 
+        fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
         if(memb->type->width == 1)
         {
             fprintf(fout, " LDR .T STA .X\n");
@@ -1428,8 +1563,6 @@ resolve_expr(Expr *e, Type *wanted)
 
     return(t);
 }
-
-Expr *parse_expr();
 
 Expr *
 parse_expr_base()
