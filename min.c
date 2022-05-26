@@ -1,18 +1,16 @@
 /*
  * TODO:
  *
- * [x] Expressions
- * [x] Functions
  * [x] Function calls
- * [x] Pointers
- * [x] No need to ALIGN by 2
  * [x] Structs
- * [ ] Arrays
+ * [x] Arrays
+ * [X] Function def better syntax (C-like)
  * [ ] Relational exprs
  * [ ] if-else stmts
  * [ ] while stmts
  *
  * BUG:
+ * [ ] Bug on function call + expr (Ex: a = sum(50, 50) - 3)
  * [ ] Local variables (not params) don't work properly
  *
  */
@@ -1041,17 +1039,25 @@ resolve_expr(Expr *e, Type *wanted)
 
         if(sym->kind == SYM_VAR)
         {
-            if(t->width == 1)
+            if(t->kind == TYPE_ARR)
             {
-                fprintf(fout, " LDA %s STA .X LDI 0 STA .X+1\n", sym->name);
-            }
-            else if(t->width == 2)
-            {
-                fprintf(fout, " LDA %s STA .X LDA %s+1 STA .X+1\n", sym->name, sym->name);
+                resolve_lvalue(e);
+                t = type_ptr(t->base);
             }
             else
             {
-                assert(0);
+                if(t->width == 1)
+                {
+                    fprintf(fout, " LDA %s STA .X LDI 0 STA .X+1\n", sym->name);
+                }
+                else if(t->width == 2)
+                {
+                    fprintf(fout, " LDA %s STA .X LDA %s+1 STA .X+1\n", sym->name, sym->name);
+                }
+                else
+                {
+                    assert(0);
+                }
             }
         }
         else if(sym->kind == SYM_VAR_LOC)
@@ -1063,17 +1069,27 @@ resolve_expr(Expr *e, Type *wanted)
             {
                 fprintf(fout, " LDI %d ADW .T", sym->offset);
             }
-            if(t->width == 1)
+
+            if(t->kind == TYPE_ARR)
             {
-                fprintf(fout, " LDR .T STA .X\n");
-            }
-            else if(t->width == 2)
-            {
-                fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
+                resolve_lvalue(e);
+                t = type_ptr(t->base);
+                fprintf(fout, " LDA .T STA .X LDA .T+1 STA .X+1\n");
             }
             else
             {
-                assert(0);
+                if(t->width == 1)
+                {
+                    fprintf(fout, " LDR .T STA .X\n");
+                }
+                else if(t->width == 2)
+                {
+                    fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
+                }
+                else
+                {
+                    assert(0);
+                }
             }
         }
         else
@@ -1124,7 +1140,7 @@ resolve_expr(Expr *e, Type *wanted)
             fprintf(fout, " ;push param %s\n", param->name);
             if(lt->width == 1)
             {
-                fprintf(fout, " LDI 0 PHS LDA .X PHS\n");
+                fprintf(fout, " LDA .X PHS\n");
             }
             else if(lt->width == 2)
             {
@@ -1198,7 +1214,7 @@ resolve_expr(Expr *e, Type *wanted)
         fprintf(fout, " PLS STA .X PLS STA .X+1\n");
 
         fprintf(fout, " LDA .X ADB .Y LDA .X+1 ACB .Y+1\n");
-        fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
+        fprintf(fout, " LDA .Y STA .T LDA .Y+1 STA .T+1\n");
 
         t = lt->base;
         if(t->width == 1)
@@ -1451,6 +1467,20 @@ resolve_expr(Expr *e, Type *wanted)
             {
                 t = type_char();
             }
+            else if(lt == type_char() && rt == type_int())
+            {
+                /* Implicit cast */
+                /* TODO: What about negative numbers? */
+                fprintf(fout, " LDI 0 STA .Y+1\n");
+                t = type_int();
+            }
+            else if(lt == type_int() && rt == type_char())
+            {
+                /* Implicit cast */
+                /* TODO: What about negative numbers? */
+                fprintf(fout, " LDI 0 STA .X+1\n");
+                t = type_int();
+            }
             else
             {
                 t = type_int();
@@ -1530,6 +1560,20 @@ resolve_expr(Expr *e, Type *wanted)
             {
                 t = type_char();
             }
+            else if(lt == type_char() && rt == type_int())
+            {
+                /* Implicit cast */
+                /* TODO: What about negative numbers? */
+                fprintf(fout, " LDI 0 STA .Y+1\n");
+                t = type_int();
+            }
+            else if(lt == type_int() && rt == type_char())
+            {
+                /* Implicit cast */
+                /* TODO: What about negative numbers? */
+                fprintf(fout, " LDI 0 STA .X+1\n");
+                t = type_int();
+            }
             else
             {
                 t = type_int();
@@ -1543,11 +1587,11 @@ resolve_expr(Expr *e, Type *wanted)
 
         if(t->width == 1)
         {
-            fprintf(fout, " LDA .Y SBB .X\n");
+            fprintf(fout, " LDA .X SBB .Y\n");
         }
         else if(t->width == 2)
         {
-            fprintf(fout, " LDA .Y SBB .X LDA .Y+1 SCB .X+1\n");
+            fprintf(fout, " LDA .X SBB .Y LDA .X+1 SCB .Y+1\n");
         }
         else
         {
@@ -1775,7 +1819,36 @@ parse_expr()
 }
 
 Sym *
-parse_decl(int param)
+parse_param()
+{
+    Sym *sym;
+    Type *type;
+
+    type = 0;
+
+    expect(IDENT);
+    sym = mksym(ident);
+    sym->kind = SYM_VAR_LOC;
+    expect(':');
+    type = parse_typespec();
+    sym->type = type;
+
+    if(type == type_void())
+    {
+        fprintf(stderr, "Invalid void type param\n");
+        assert(0);
+    }
+
+    sym->offset = currfunc->poffset;
+    currfunc->poffset += type->width;
+
+    assert(sym);
+
+    return(sym);
+}
+
+Sym *
+parse_decl()
 {
     Sym *sym;
     Type *type;
@@ -1799,14 +1872,14 @@ parse_decl(int param)
             assert(0);
         }
 
-        if(param)
+        if(type->width == 1)
         {
-            sym->offset = currfunc->poffset;
-            currfunc->poffset += type->width;
+            sym->offset = currfunc->offset;
+            currfunc->offset -= 1;
         }
         else
         {
-            currfunc->offset -= type->width;
+            currfunc->offset -= (type->width - 1);
             sym->offset = currfunc->offset;
         }
     }
@@ -1986,7 +2059,7 @@ parse_stmt()
                     fprintf(fout, " ;push param %s\n", param->name);
                     if(lt->width == 1)
                     {
-                        fprintf(fout, " LDI 0 PHS LDA .X PHS\n");
+                        fprintf(fout, " LDA .X PHS\n");
                     }
                     else if(lt->width == 2)
                     {
@@ -2133,15 +2206,72 @@ parse_glob_decl()
         fprintf(fout, "%s:\n", ident);
         sym = addsym(ident);
         sym->kind = SYM_FUNC;
-        sym->offset = 2;
+        sym->offset = 0;
         sym->poffset = 3;
         currfunc = sym;
 
         fprintf(fout, " LDA 0xffff STA .BP.%s\n", currfunc->name);
 
+        params = 0;
+        param = 0;
+        expect('(');
+        t = peek();
+        while(t != ')')
+        {
+            if(param)
+            {
+                param->next = parse_param();
+                param = param->next;
+            }
+            else
+            {
+                param = parse_param();
+                params = param;
+            }
+
+            tmp = addsym(param->name);
+            tmp->kind = param->kind;
+            tmp->type = param->type;
+            tmp->offset = param->offset;
+
+            t = peek();
+            if(t != ')')
+            {
+                expect(',');
+                t = peek();
+            }
+        }
+        expect(')');
+
+        sym->params = params;
+
         expect(':');
         type = parse_typespec();
         sym->type = type;
+
+        expect('{');
+
+        t = peek();
+        while(t == VAR)
+        {
+            parse_decl();
+            expect(';');
+            t = peek();
+        }
+
+        if(sym->offset != 0)
+        {
+            fprintf(fout, " LDI %d ADB 0xffff\n", sym->offset);
+        }
+
+        while(t != '}')
+        {
+            parse_stmt();
+            t = peek();
+        }
+
+        expect('}');
+#if 0
         expect(';');
 
         params = 0;
@@ -2178,7 +2308,7 @@ parse_glob_decl()
             t = peek();
         }
 
-        if(sym->offset > 2)
+        if(sym->offset != 0)
         {
             fprintf(fout, " LDI %d ADB 0xffff\n", sym->offset);
         }
@@ -2190,6 +2320,7 @@ parse_glob_decl()
         }
 
         expect('}');
+#endif
 
         fprintf(fout, " LDA .BP.%s STA 0xffff\n", currfunc->name);
         fprintf(fout, " RTS\n");
@@ -2292,6 +2423,8 @@ regmul(char *x, char *y)
 int
 main()
 {
+    Sym *sym;
+    Sym *param;
     int i;
 
     fin = fopen("test.min", "r");
@@ -2300,7 +2433,7 @@ main()
 #else
     fout = stdout;
 #endif
-    line = 0;
+    line = 1;
 
     /* std lib */
 #if 1
@@ -2315,6 +2448,17 @@ main()
     }
     fputc('\n', fout);
     fclose(flib);
+
+    sym = addsym("puts");
+    sym->kind = SYM_FUNC;
+    sym->type = type_void();
+    sym->offset = 0;
+    sym->poffset = 3+2;
+    param = mksym("s");
+    param->type = type_ptr(type_char());
+    param->offset = 3;
+    param->next = 0;
+    sym->params = param;
 #else
 #endif
 

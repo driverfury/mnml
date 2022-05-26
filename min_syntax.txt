@@ -21,8 +21,10 @@ INTLIT = [0-9]*
 <unit> = <glob_decl>*
 
 <glob_decl> = VAR IDENT ':' <typespec> ';'
-            | FUNC IDENT ':' <typespec> ';' (<decl> ';')* '{' (<decl> ',')* <stmt>* '}'
+            | FUNC IDENT '(' <params>? ')' ':' <typespec> '{' (<decl> ',')* <stmt>* '}'
             | STRUCT IDENT <struct_def>
+
+<params> = <param> (','<param>))*
 
 <stmt_block> = '{' <stmt>* '}'
 
