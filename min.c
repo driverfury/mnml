@@ -10,8 +10,7 @@
  * [ ] while stmts
  *
  * BUG:
- * [ ] Bug on function call + expr (Ex: a = sum(50, 50) - 3)
- * [ ] Local variables (not params) don't work properly
+ * [x] Bug on function call + expr (Ex: a = sum(50, 50) - 3)
  *
  */
 
@@ -1588,10 +1587,12 @@ resolve_expr(Expr *e, Type *wanted)
         if(t->width == 1)
         {
             fprintf(fout, " LDA .X SBB .Y\n");
+            fprintf(fout, " LDA .Y STA .X\n");
         }
         else if(t->width == 2)
         {
             fprintf(fout, " LDA .X SBB .Y LDA .X+1 SCB .Y+1\n");
+            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
         }
         else
         {
@@ -2211,6 +2212,8 @@ parse_glob_decl()
         currfunc = sym;
 
         fprintf(fout, " LDA 0xffff STA .BP.%s\n", currfunc->name);
+        fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
 
         params = 0;
         param = 0;
@@ -2322,6 +2325,8 @@ parse_glob_decl()
         expect('}');
 #endif
 
+        fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
         fprintf(fout, " LDA .BP.%s STA 0xffff\n", currfunc->name);
         fprintf(fout, " RTS\n");
 
