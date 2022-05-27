@@ -266,6 +266,13 @@ emu_exec(Emu *emu)
             emu->a = ANS_TO_U8(ans);
         } break;
 
+        /* ASR */
+        case 0x09:
+        {
+            /* TODO: Arithmetic Shift Right */
+            assert(0);
+        } break;
+
         /* INP */
         case 0x0a:
         {
@@ -887,6 +894,9 @@ emu_disasm(Emu *emu)
 
         /* ROR */
         case 0x08: { printf("ROR"); } break;
+
+        /* ASR */
+        case 0x09: { printf("ASR"); } break;
 
         /* INP */
         case 0x0a: { printf("INP"); } break;

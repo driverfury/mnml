@@ -15,6 +15,11 @@ CAST = 'cast'
 
 SPMEMB = '->'
 
+LESSEQ = '<='
+GRTREQ = '>='
+EQ = '=='
+NEQ = '!='
+
 IDENT = [_A-Za-z][_A-Za-z0-9]*
 INTLIT = [0-9]*
 
@@ -81,4 +86,14 @@ INTLIT = [0-9]*
            | <expr_add> '-' <expr_mul>
            | <expr_mul>
 
-<expr> = <expr_add>
+<expr_rel> = <expr_rel> '<' <expr_add>
+           | <expr_rel> LESSEQ <expr_add>
+           | <expr_rel> '>' <expr_add>
+           | <expr_rel> GRTREQ <expr_add>
+           | <expr_add>
+
+<expr_eq> = <expr_eq> EQ <expr_rel>
+          | <expr_eq> NEQ <expr_rel>
+          | <expr_rel>
+
+<expr> = <expr_rel>

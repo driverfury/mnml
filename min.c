@@ -5,9 +5,13 @@
  * [x] Structs
  * [x] Arrays
  * [X] Function def better syntax (C-like)
- * [ ] Relational exprs
- * [ ] if-else stmts
- * [ ] while stmts
+ * [x] Relational exprs
+ * [x] Equality exprs
+ * [x] if-else stmts
+ * [x] while stmts
+ * [ ] Logic AND and OR (&& ||)
+ * [ ] Char literals
+ * [ ] String literals
  *
  * BUG:
  * [x] Bug on function call + expr (Ex: a = sum(50, 50) - 3)
@@ -497,7 +501,13 @@ enum
     WHILE,
 
     CAST,
+
     SPMEMB,
+
+    LESSEQ,
+    GRTREQ,
+    EQ,
+    NEQ,
 };
 
 char ident[MAX_IDENT_LEN + 1];
@@ -577,7 +587,71 @@ look(int update)
         else if(strcmp(ident, "else") == 0)   { tok = ELSE; }
         else if(strcmp(ident, "while") == 0)  { tok = WHILE; }
         else if(strcmp(ident, "cast") == 0)   { tok = CAST; }
-        else if(strcmp(ident, "->") == 0)     { tok = SPMEMB; }
+    }
+    else if(c == '-')
+    {
+        tok = (int)c;
+        c = getch();
+        if(c == '>')
+        {
+            tok = SPMEMB;
+        }
+        else
+        {
+            putback(c);
+        }
+    }
+    else if(c == '<')
+    {
+        tok = (int)c;
+        c = getch();
+        if(c == '=')
+        {
+            tok = LESSEQ;
+        }
+        else
+        {
+            putback(c);
+        }
+    }
+    else if(c == '>')
+    {
+        tok = (int)c;
+        c = getch();
+        if(c == '=')
+        {
+            tok = GRTREQ;
+        }
+        else
+        {
+            putback(c);
+        }
+    }
+    else if(c == '=')
+    {
+        tok = (int)c;
+        c = getch();
+        if(c == '=')
+        {
+            tok = EQ;
+        }
+        else
+        {
+            putback(c);
+        }
+    }
+    else if(c == '!')
+    {
+        tok = (int)c;
+        c = getch();
+        if(c == '=')
+        {
+            tok = NEQ;
+        }
+        else
+        {
+            putback(c);
+        }
     }
     else
     {
@@ -626,6 +700,17 @@ expect(int exp)
 /**                      PARSER                    **/
 /****************************************************/
 
+int lblcount;
+
+int
+newlbl()
+{
+    int res;
+    res = lblcount;
+    ++lblcount;
+    return(res);
+}
+
 Sym *currfunc;
 
 enum
@@ -649,6 +734,14 @@ enum
 
     EXPR_ADD,
     EXPR_SUB,
+
+    EXPR_LESS,
+    EXPR_LESSEQ,
+    EXPR_GRTR,
+    EXPR_GRTREQ,
+
+    EXPR_EQ,
+    EXPR_NEQ,
 
     EXPR_COUNT
 };
@@ -998,6 +1091,7 @@ resolve_expr(Expr *e, Type *wanted)
     Sym *param;
     int paramsz;
     SMemb *memb;
+    char *ins;
 
     assert(e);
 
@@ -1599,6 +1693,86 @@ resolve_expr(Expr *e, Type *wanted)
             assert(0);
         }
     }
+    else if(e->kind == EXPR_LESS || e->kind == EXPR_LESSEQ ||
+            e->kind == EXPR_GRTR || e->kind == EXPR_GRTREQ)
+    {
+        lt = resolve_expr(e->l, 0);
+        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        rt = resolve_expr(e->r, lt);
+
+        if(lt != rt)
+        {
+            fprintf(stderr, "Cannot compare two different types\n");
+            assert(0);
+        }
+
+        if(lt == type_char())
+        {
+            fprintf(fout, " LDI 0 STA .X+1 STA .Y+1\n");
+        }
+        else if(lt == type_int() || lt->kind == TYPE_PTR)
+        {
+            /* Nothing */
+        }
+        else
+        {
+            fprintf(stderr, "Invalid types in comparison\n");
+            assert(0);
+        }
+
+             if(e->kind == EXPR_LESS)   { ins = ".WLESS"; }
+        else if(e->kind == EXPR_LESSEQ) { ins = ".WLESSEQ"; }
+        else if(e->kind == EXPR_GRTR)   { ins = ".WGRTR"; }
+        else if(e->kind == EXPR_GRTREQ) { ins = ".WGRTREQ"; }
+        else { assert(0); }
+
+        fprintf(fout, " PHS\n");
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+        fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+        fprintf(fout, " JPS %s\n", ins);
+        fprintf(fout, " PLS PLS PLS PLS\n");
+        fprintf(fout, " PLS STA .X LDI 0 STA .X+1\n");
+
+        t = type_char();
+    }
+    else if(e->kind == EXPR_EQ || e->kind == EXPR_NEQ)
+    {
+        lt = resolve_expr(e->l, 0);
+        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        rt = resolve_expr(e->r, lt);
+
+        if(lt != rt)
+        {
+            fprintf(stderr, "Cannot compare two different types\n");
+            assert(0);
+        }
+
+        if(lt == type_char())
+        {
+            fprintf(fout, " LDI 0 STA .X+1 STA .Y+1\n");
+        }
+        else if(lt == type_int() || lt->kind == TYPE_PTR)
+        {
+            /* Nothing */
+        }
+        else
+        {
+            fprintf(stderr, "Invalid types in comparison\n");
+            assert(0);
+        }
+
+        fprintf(fout, " LDA .X SBB .Y LDA .X+1 SCB .Y+1\n");
+        fprintf(fout, " PHS\n");
+        fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+        fprintf(fout, " JPS .WZERO PLS PLS PLS\n");
+        if(e->kind == EXPR_NEQ)
+        {
+            fprintf(fout, " NEG\n");
+        }
+        fprintf(fout, " STA .X LDI 0 STA .X+1\n");
+
+        t = type_char();
+    }
     else
     {
         assert(0);
@@ -1794,7 +1968,7 @@ parse_expr_add()
     l = 0;
     r = 0;
 
-    l = parse_expr_unary();
+    l = parse_expr_mul();
     t = peek();
     while(t == '+' || t == '-')
     {
@@ -1804,7 +1978,69 @@ parse_expr_add()
         else if(t == '-') { k = EXPR_SUB; }
         else { assert(0); }
 
-        r = parse_expr_unary();
+        r = parse_expr_mul();
+        l = mkexprbin(k, l, r);
+
+        t = peek();
+    }
+
+    return(l);
+}
+
+Expr *
+parse_expr_rel()
+{
+    Expr *l;
+    Expr *r;
+    int t;
+    int k;
+
+    l = 0;
+    r = 0;
+
+    l = parse_expr_add();
+    t = peek();
+    while(t == '<' || t == LESSEQ || t == '>' || t == GRTREQ)
+    {
+        next();
+
+             if(t == '<')    { k = EXPR_LESS; }
+        else if(t == LESSEQ) { k = EXPR_LESSEQ; }
+        else if(t == '>')    { k = EXPR_GRTR; }
+        else if(t == GRTREQ) { k = EXPR_GRTREQ; }
+        else { assert(0); }
+
+        r = parse_expr_add();
+        l = mkexprbin(k, l, r);
+
+        t = peek();
+    }
+
+    return(l);
+}
+
+Expr *
+parse_expr_eq()
+{
+    Expr *l;
+    Expr *r;
+    int t;
+    int k;
+
+    l = 0;
+    r = 0;
+
+    l = parse_expr_rel();
+    t = peek();
+    while(t == EQ || t == NEQ)
+    {
+        next();
+
+             if(t == EQ)  { k = EXPR_EQ; }
+        else if(t == NEQ) { k = EXPR_NEQ; }
+        else { assert(0); }
+
+        r = parse_expr_rel();
         l = mkexprbin(k, l, r);
 
         t = peek();
@@ -1816,7 +2052,7 @@ parse_expr_add()
 Expr *
 parse_expr()
 {
-    return(parse_expr_add());
+    return(parse_expr_eq());
 }
 
 Sym *
@@ -1964,17 +2200,56 @@ parse_stmt()
     Sym *param;
     int t;
     int paramsz;
+    int haselse;
+    int lbl1;
+    int lbl2;
 
     t = peek();
     if(t == IF)
     {
+        lbl1 = newlbl();
+        lbl2 = newlbl();
+
         next();
-        /* TODO: HERE */
+        expect('(');
+        e = parse_expr();
+        expect(')');
+        lt = resolve_expr(e, type_char());
+
+        fprintf(fout, " LDA .X CPI 0 BEQ .L%d\n", lbl1);
+        parse_stmt();
+
+        haselse = 0;
+        t = peek();
+        if(t == ELSE)
+        {
+            next();
+            haselse = 1;
+            fprintf(fout, " JPA .L%d\n", lbl2);
+        }
+        fprintf(fout, ".L%d:\n", lbl1);
+        if(haselse)
+        {
+            parse_stmt();
+            fprintf(fout, ".L%d:\n", lbl2);
+        }
     }
     else if(t == WHILE)
     {
+        lbl1 = newlbl();
+        lbl2 = newlbl();
+
         next();
-        /* TODO: HERE */
+        expect('(');
+        fprintf(fout, ".L%d:\n", lbl1);
+        e = parse_expr();
+        expect(')');
+        lt = resolve_expr(e, type_char());
+
+        fprintf(fout, " LDA .X CPI 0 BEQ .L%d\n", lbl2);
+        parse_stmt();
+        fprintf(fout, " JPA .L%d\n", lbl1);
+        fprintf(fout, ".L%d:\n", lbl2);
     }
     else if(t == RETURN)
     {
