@@ -14,7 +14,8 @@
  * [x] String literals
  *
  * BUG:
- * [x] Bug on function call + expr (Ex: a = sum(50, 50) - 3)
+ * [x] Function call params order is inverted
+ * [ ] while stmt is bugged?
  *
  */
 
@@ -1279,7 +1280,6 @@ resolve_expr(Expr *e, Type *wanted)
         }
         else if(sym->kind == SYM_VAR_LOC)
         {
-            /* TODO: Maybe we can use LDS */
             fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n",
                 currfunc->name, currfunc->name);
             if(sym->offset != 0)
@@ -1956,6 +1956,26 @@ resolve_expr(Expr *e, Type *wanted)
 }
 
 Expr *
+revargs(Expr *args)
+{
+    Expr *res;
+
+    res = 0;
+    if(!args || !(args->next))
+    {
+        res = args;
+    }
+    else
+    {
+        res = revargs(args->next);
+        args->next->next = args;
+        args->next = 0;
+    }
+
+    return(res);
+}
+
+Expr *
 parse_expr_base()
 {
     Expr *e;
@@ -2027,6 +2047,8 @@ parse_expr_first()
             }
         }
         expect(')');
+
+        args = revargs(args);
 
         e = mkexprbin(EXPR_CALL, e, args);
     }
@@ -2409,6 +2431,8 @@ parse_stmt()
     int haselse;
     int lbl1;
     int lbl2;
+    Expr *args;
+    Expr *arg;
 
     t = peek();
     if(t == IF)
@@ -2465,7 +2489,7 @@ parse_stmt()
         if(t != ';')
         {
             e = parse_expr();
-            lt = resolve_expr(e, 0);
+            lt = resolve_expr(e, currfunc->type);
         }
         else
         {
@@ -2473,13 +2497,36 @@ parse_stmt()
         }
         expect(';');
 
-        /* TODO: Check function return type compatibility */
+        if(lt != currfunc->type)
+        {
+            fprintf(fout, "Type mismatch in return expressions\n");
+            assert(0);
+        }
 
-        /* TODO: This should be based on return type width */
-        fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n",
-            currfunc->name, currfunc->name);
-        fprintf(fout, " LDI %d ADW .T\n", currfunc->poffset);
-        fprintf(fout, " LDA .X STR .T INW .T LDA .X+1 STR .T\n");
+        if(lt != type_void())
+        {
+            fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n",
+                currfunc->name, currfunc->name);
+            fprintf(fout, " LDI %d ADW .T\n", currfunc->poffset);
+            if(lt->width == 1)
+            {
+                fprintf(fout, " LDA .X STR .T\n");
+            }
+            else if(lt->width == 2)
+            {
+                fprintf(fout, " LDA .X STR .T INW .T LDA .X+1 STR .T\n");
+            }
+            else
+            {
+                /* TODO: HERE */
+                assert(0);
+            }
+        }
+
+        fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+        fprintf(fout, " LDA .BP.%s STA 0xffff\n", currfunc->name);
+        fprintf(fout, " RTS\n");
     }
     else if(t == '{')
     {
@@ -2511,7 +2558,6 @@ parse_stmt()
                 }
 
                 paramsz = 0;
-
                 if(sym->type->width > 0)
                 {
                     fprintf(fout, " ;reserve space for ret %s\n", sym->name);
@@ -2519,18 +2565,42 @@ parse_stmt()
                     paramsz += sym->type->width;
                 }
 
-                param = sym->params;
+                args = 0;
+                arg = 0;
                 expect('(');
                 t = peek();
                 while(t != ')')
+                {
+                    if(arg)
+                    {
+                        arg->next = parse_expr();
+                        arg = arg->next;
+                    }
+                    else
+                    {
+                        arg = parse_expr();
+                        args = arg;
+                    }
+
+                    t = peek();
+                    if(t != ')')
+                    {
+                        expect(',');
+                        t = peek();
+                    }
+                }
+
+                args = revargs(args);
+                arg = args;
+                param = sym->params;
+                while(arg)
                 {
                     if(!param)
                     {
                         fprintf(stderr, "Invalid param for function %s\n", sym->name);
                         assert(0);
                     }
-                    e = parse_expr();
-                    lt = resolve_expr(e, param->type);
+                    lt = resolve_expr(arg, param->type);
 
                     if(lt != param->type)
                     {
@@ -2555,13 +2625,7 @@ parse_stmt()
                     paramsz += lt->width;
                 
                     param = param->next;
-
-                    t = peek();
-                    if(t != ')')
-                    {
-                        expect(',');
-                        t = peek();
-                    }
+                    arg = arg->next;
                 }
 
                 if(param)
@@ -2654,6 +2718,7 @@ parse_glob_decl()
     int i;
     Sym *params;
     Sym *param;
+    int paramsz;
     Sym *tmp;
     SMemb *members;
     SMemb *memb;
@@ -2696,6 +2761,7 @@ parse_glob_decl()
         fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
         fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
 
+        paramsz = 0;
         params = 0;
         param = 0;
         expect('(');
@@ -2713,10 +2779,7 @@ parse_glob_decl()
                 params = param;
             }
 
-            tmp = addsym(param->name);
-            tmp->kind = param->kind;
-            tmp->type = param->type;
-            tmp->offset = param->offset;
+            paramsz += param->type->width;
 
             t = peek();
             if(t != ')')
@@ -2726,6 +2789,21 @@ parse_glob_decl()
             }
         }
         expect(')');
+            
+        /* NOTE: Adjust params offsets */
+        param = params;
+        while(param)
+        {
+            param->offset = paramsz + 2 - (param->type->width - 1);
+            paramsz -= param->type->width;
+
+            tmp = addsym(param->name);
+            tmp->kind = param->kind;
+            tmp->type = param->type;
+            tmp->offset = param->offset;
+
+            param = param->next;
+        }
 
         sym->params = params;
 
