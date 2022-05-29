@@ -9,20 +9,20 @@
  * [x] Equality exprs
  * [x] if-else stmts
  * [x] while stmts
- * [ ] Logic AND and OR (&& ||)
- * [ ] Char literals
- * [ ] String literals
+ * [x] Logic AND and OR (&& ||)
+ * [x] Char literals
+ * [x] String literals
  *
  * BUG:
  * [x] Bug on function call + expr (Ex: a = sum(50, 50) - 3)
  *
  */
 
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <ctype.h>
+#include <stdio.h>
 
 #define MAX_IDENT_LEN 32
 
@@ -444,6 +444,7 @@ addsym(char *name)
 
 FILE *fin;
 FILE *fout;
+FILE *fstr;
 FILE *flib;
 
 int line;
@@ -480,12 +481,24 @@ getch()
     return(c);
 }
 
+int lblcount;
+
+int
+newlbl()
+{
+    int res;
+    res = lblcount;
+    ++lblcount;
+    return(res);
+}
+
 enum
 {
     END = 128,
 
     IDENT,
     INTLIT,
+    STRLIT,
 
     VAR,
     FUNC,
@@ -508,11 +521,15 @@ enum
     GRTREQ,
     EQ,
     NEQ,
+    AND,
+    OR,
 };
 
 char ident[MAX_IDENT_LEN + 1];
 int intval;
 char buff[MAX_IDENT_LEN + 1];
+char strlbl[MAX_IDENT_LEN + 1];
+int isstrlit = -1;
 
 int
 look(int update)
@@ -653,6 +670,90 @@ look(int update)
             putback(c);
         }
     }
+    else if(c == '&')
+    {
+        tok = (int)c;
+        c = getch();
+        if(c == '&')
+        {
+            tok = AND;
+        }
+        else
+        {
+            putback(c);
+        }
+    }
+    else if(c == '|')
+    {
+        tok = (int)c;
+        c = getch();
+        if(c == '|')
+        {
+            tok = OR;
+        }
+        else
+        {
+            putback(c);
+        }
+    }
+    else if(c == '\'')
+    {
+        tok = INTLIT;
+
+        c = getch();
+        /* TODO: Escapes */
+        intval = (int)c;
+
+        c = getch();
+        if(c != '\'')
+        {
+            fprintf(stderr, "Invalid char literal\n");
+            assert(0);
+        }
+    }
+    else if(c == '"')
+    {
+        tok = STRLIT;
+
+        /* NOTE: There's no snprintf in ANSI C90 */
+        if(!isstrlit)
+        {
+            isstrlit = 1;
+            sprintf(strlbl, ".S%d", newlbl());
+            fprintf(fstr, "%s:\n", strlbl);
+
+            i = 0;
+            c = getch();
+            while(c != '"')
+            {
+                /* TODO: Escapes */
+                fprintf(fstr, " 0x%02x", c);
+                if((i > 0) && (i % 16 == 0))
+                {
+                    fprintf(fstr, "\n");
+                }
+
+                ++i;
+                c = getch();
+            }
+            fprintf(fstr, " 0x00\n");
+        }
+        else
+        {
+            /* String literal already defined, skip it */
+            c = getch();
+            while(c != '"')
+            {
+                c = getch();
+            }
+        }
+
+        if(c != '"')
+        {
+            fprintf(stderr, "Invalid string literal\n");
+            assert(0);
+        }
+    }
     else
     {
         tok = (int)c;
@@ -661,11 +762,16 @@ look(int update)
     if(update)
     {
         line = newline;
+        isstrlit = 0;
     }
     else
     {
         fseek(fin, pos, SEEK_SET);
         pback = pbackold;
+        if(tok == STRLIT)
+        {
+            isstrlit = 1;
+        }
     }
 
     return(tok);
@@ -700,22 +806,12 @@ expect(int exp)
 /**                      PARSER                    **/
 /****************************************************/
 
-int lblcount;
-
-int
-newlbl()
-{
-    int res;
-    res = lblcount;
-    ++lblcount;
-    return(res);
-}
-
 Sym *currfunc;
 
 enum
 {
     EXPR_INTLIT,
+    EXPR_STRLIT,
     EXPR_ID,
 
     EXPR_CALL,
@@ -742,6 +838,9 @@ enum
 
     EXPR_EQ,
     EXPR_NEQ,
+
+    EXPR_AND,
+    EXPR_OR,
 
     EXPR_COUNT
 };
@@ -774,6 +873,24 @@ mkexprint(int val)
         res->type = 0;
         res->kind = EXPR_INTLIT;
         res->val = val;
+        res->next = 0;
+    }
+
+    return(res);
+}
+
+Expr *
+mkexprstr(char *id)
+{
+    Expr *res;
+
+    res = (Expr *)malloc(sizeof(Expr));
+    if(res)
+    {
+        res->type = 0;
+        res->kind = EXPR_STRLIT;
+        strncpy(res->id, id, MAX_IDENT_LEN);
+        res->id[MAX_IDENT_LEN] = 0;
         res->next = 0;
     }
 
@@ -1092,6 +1209,8 @@ resolve_expr(Expr *e, Type *wanted)
     int paramsz;
     SMemb *memb;
     char *ins;
+    int lbl1;
+    int lbl2;
 
     assert(e);
 
@@ -1118,6 +1237,11 @@ resolve_expr(Expr *e, Type *wanted)
         }
 
         fprintf(fout, " LDI %d STA .X LDI %d STA .X+1\n", (e->val&0xff), ((e->val>>8)&0xff));
+    }
+    else if(e->kind == EXPR_STRLIT)
+    {
+        fprintf(fout, " LDI <%s STA .X LDI >%s STA .X+1\n", e->id, e->id);
+        t = type_ptr(type_char());
     }
     else if(e->kind == EXPR_ID)
     {
@@ -1773,6 +1897,54 @@ resolve_expr(Expr *e, Type *wanted)
 
         t = type_char();
     }
+    else if(e->kind == EXPR_AND || e->kind == EXPR_OR)
+    {
+        lbl1 = newlbl();
+        lbl2 = newlbl();
+
+        lt = resolve_expr(e->l, type_char());
+        if(lt != type_char())
+        {
+            fprintf(stderr, "Invalid logic expr (only type char is allowed as operand)\n");
+        }
+        if(e->kind == EXPR_AND)
+        {
+            fprintf(fout, " LDA .X CPI 0 BEQ .L%d\n", lbl1);
+        }
+        else
+        {
+            fprintf(fout, " LDA .X CPI 0 BNE .L%d\n", lbl1);
+        }
+
+        rt = resolve_expr(e->r, type_char());
+        if(rt != type_char())
+        {
+            fprintf(stderr, "Invalid logic expr (only type char is allowed as operand)\n");
+        }
+        if(e->kind == EXPR_AND)
+        {
+            fprintf(fout, " LDA .X CPI 0 BEQ .L%d\n", lbl1);
+            fprintf(fout, " LDI 0xff STA .X JPA .L%d\n", lbl2);
+        }
+        else
+        {
+            fprintf(fout, " LDA .X CPI 0 BNE .L%d\n", lbl1);
+            fprintf(fout, " LDI 0 STA .X JPA .L%d\n", lbl2);
+        }
+
+        fprintf(fout, ".L%d:\n", lbl1);
+        if(e->kind == EXPR_AND)
+        {
+            fprintf(fout, " LDI 0 STA .X\n");
+        }
+        else
+        {
+            fprintf(fout, " LDI 0xff STA .X\n");
+        }
+        fprintf(fout, ".L%d:\n", lbl2);
+
+        t = type_char();
+    }
     else
     {
         assert(0);
@@ -1794,6 +1966,10 @@ parse_expr_base()
     if(t == INTLIT)
     {
         e = mkexprint(intval);
+    }
+    else if(t == STRLIT)
+    {
+        e = mkexprstr(strlbl);
     }
     else if(t == IDENT)
     {
@@ -2050,9 +2226,39 @@ parse_expr_eq()
 }
 
 Expr *
+parse_expr_logic()
+{
+    Expr *l;
+    Expr *r;
+    int t;
+    int k;
+
+    l = 0;
+    r = 0;
+
+    l = parse_expr_eq();
+    t = peek();
+    while(t == AND || t == OR)
+    {
+        next();
+
+             if(t == AND) { k = EXPR_AND; }
+        else if(t == OR)  { k = EXPR_OR; }
+        else { assert(0); }
+
+        r = parse_expr_eq();
+        l = mkexprbin(k, l, r);
+
+        t = peek();
+    }
+
+    return(l);
+}
+
+Expr *
 parse_expr()
 {
-    return(parse_expr_eq());
+    return(parse_expr_logic());
 }
 
 Sym *
@@ -2708,6 +2914,7 @@ main()
     int i;
 
     fin = fopen("test.min", "r");
+    fstr = fopen("test.str.asm", "w");
 #ifdef GDB
     fout = fopen("test.asm", "w");
 #else
@@ -2758,6 +2965,16 @@ main()
 #endif
 
     fclose(fin);
+    fclose(fstr);
+
+    fprintf(fout, "\n\n;+++ STRINGS +++\n\n");
+    fstr = fopen("test.str.asm", "r");
+    while((i = fgetc(fstr)) != EOF)
+    {
+        fputc(i, fout);
+    }
+    fclose(fstr);
+
 #ifdef GDB
     fclose(fout);
 #endif

@@ -22,6 +22,8 @@ NEQ = '!='
 
 IDENT = [_A-Za-z][_A-Za-z0-9]*
 INTLIT = [0-9]*
+       | '\'' . '\''
+STRLIT = '"' .* '"'
 
 <unit> = <glob_decl>*
 
@@ -61,6 +63,7 @@ INTLIT = [0-9]*
 <args> = <expr> (',' <expr>)*
 
 <expr_base> = INTLIT
+            | STRLIT
             | IDENT
             | '(' <expr> ')'
 
@@ -96,4 +99,8 @@ INTLIT = [0-9]*
           | <expr_eq> NEQ <expr_rel>
           | <expr_rel>
 
-<expr> = <expr_rel>
+<expr_logic> = <expr_logic> AND <expr_eq>
+             | <expr_logic> OR <expr_eq>
+             | <expr_eq>
+
+<expr> = <expr_logic>
