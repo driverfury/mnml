@@ -14,14 +14,21 @@
  * [x] String literals
  * [x] Comments
  * [x] Typedefs
+ * [x] Modulo operator
+ * [ ] Multiplication operator
+ * [ ] Division operator
+ * [ ] Logical NOT (!)
  *
  * BUG:
  * [x] Function call params order is inverted
  * [x] while stmt is bugged? or logical exprs?
- * [ ] Signed cast
+ * [x] Signed cast
  * [x] Local variables are bugged. Check bugged.min
  * [x] Comments
- *
+ * [ ] Complex expressions like 97 + 7%15
+ *     97 gets stored in X, then Y <- X
+ *     But when resolving the right operand, Y gets overwritten.
+ *     Solution: push the temp result onto the stack.
  */
 
 #include <stdlib.h>
@@ -1646,13 +1653,17 @@ resolve_expr(Expr *e, Type *wanted)
 
         if(lt != t)
         {
-            if( (lt == type_char() && t == type_int()) ||
-                (lt == type_int() && t == type_char()))
+            if(lt == type_char() && t == type_int())
             {
-                /* TODO: NOTE: This is not always correct. If the number is
-                 * negative and you cast from char to int, the MSB must be 0xff
-                 */
-                fprintf(fout, " LDI 0 STA .X+1\n");
+                fprintf(fout, " PHS PHS LDA .X PHS\n");
+                fprintf(fout, " JPS .BTOW PLS\n");
+                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+            }
+            else if(lt == type_int() && t == type_char())
+            {
+                fprintf(fout, " PHS LDA .X+1 PHS LDA .X PHS\n");
+                fprintf(fout, " JPS .WTOB PLS PLS\n");
+                fprintf(fout, " PLS STA .X\n");
             }
             else if(lt->kind == TYPE_PTR && t->kind == TYPE_PTR)
             {
@@ -1676,8 +1687,91 @@ resolve_expr(Expr *e, Type *wanted)
     }
     else if(e->kind == EXPR_MOD)
     {
-        /* TODO: HERE */
-        assert(0);
+        lt = resolve_expr(e->l, 0);
+        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        rt = resolve_expr(e->r, lt);
+
+        if(lt->kind == TYPE_PTR || rt->kind == TYPE_PTR)
+        {
+            if(lt->kind == TYPE_PTR && (rt == type_char() || rt == type_int()))
+            {
+                t = lt;
+
+                if(lt->base->width == 0)
+                {
+                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
+                    assert(0);
+                }
+
+                assert(lt->base->width > 0 && lt->base->width < 256);
+                fprintf(fout, " PHS PHS\n");
+                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+            }
+            else if(rt->kind == TYPE_PTR && (lt == type_char() || lt == type_int()))
+            {
+                t = rt;
+
+                if(rt->base->width == 0)
+                {
+                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
+                    assert(0);
+                }
+
+                assert(rt->base->width > 0 && rt->base->width < 256);
+                fprintf(fout, " PHS PHS\n");
+                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+            }
+            else
+            {
+                fprintf(stderr, "Invalid pointer arithmetic\n");
+                assert(0);
+            }
+        }
+        else if((lt == type_char() || lt == type_int()) &&
+                (rt == type_char() || rt == type_int()))
+        {
+            if(lt == type_char() && rt == type_char())
+            {
+                t = type_char();
+            }
+            else if(lt == type_char() && rt == type_int())
+            {
+                /* NOTE: Implicit cast */
+                fprintf(fout, " PHS PHS LDA .Y PHS\n");
+                fprintf(fout, " JPS .BTOW PLS\n");
+                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+                t = type_int();
+            }
+            else if(lt == type_int() && rt == type_char())
+            {
+                /* Implicit cast */
+                fprintf(fout, " PHS PHS LDA .X PHS\n");
+                fprintf(fout, " JPS .BTOW PLS\n");
+                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+                t = type_int();
+            }
+            else
+            {
+                t = type_int();
+            }
+        }
+        else
+        {
+            fprintf(stderr, "Cannot add a non-arithmetic type\n");
+            assert(0);
+        }
+
+        fprintf(fout, " PHS PHS\n");
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+        fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+        fprintf(fout, " JPS .WMOD PLS PLS PLS PLS\n");
+        fprintf(fout, " PLS STA .X PLS STA .X+1\n");
     }
     else if(e->kind == EXPR_ADD)
     {
@@ -1736,16 +1830,18 @@ resolve_expr(Expr *e, Type *wanted)
             }
             else if(lt == type_char() && rt == type_int())
             {
-                /* Implicit cast */
-                /* TODO: What about negative numbers? */
-                fprintf(fout, " LDI 0 STA .Y+1\n");
+                /* NOTE: Implicit cast */
+                fprintf(fout, " PHS PHS LDA .Y PHS\n");
+                fprintf(fout, " JPS .BTOW PLS\n");
+                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
                 t = type_int();
             }
             else if(lt == type_int() && rt == type_char())
             {
                 /* Implicit cast */
-                /* TODO: What about negative numbers? */
-                fprintf(fout, " LDI 0 STA .X+1\n");
+                fprintf(fout, " PHS PHS LDA .X PHS\n");
+                fprintf(fout, " JPS .BTOW PLS\n");
+                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
                 t = type_int();
             }
             else
@@ -1830,15 +1926,17 @@ resolve_expr(Expr *e, Type *wanted)
             else if(lt == type_char() && rt == type_int())
             {
                 /* Implicit cast */
-                /* TODO: What about negative numbers? */
-                fprintf(fout, " LDI 0 STA .Y+1\n");
+                fprintf(fout, " PHS PHS LDA .Y PHS\n");
+                fprintf(fout, " JPS .BTOW PLS\n");
+                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
                 t = type_int();
             }
             else if(lt == type_int() && rt == type_char())
             {
                 /* Implicit cast */
-                /* TODO: What about negative numbers? */
-                fprintf(fout, " LDI 0 STA .X+1\n");
+                fprintf(fout, " PHS PHS LDA .X PHS\n");
+                fprintf(fout, " JPS .BTOW PLS\n");
+                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
                 t = type_int();
             }
             else
@@ -1882,7 +1980,13 @@ resolve_expr(Expr *e, Type *wanted)
 
         if(lt == type_char())
         {
-            fprintf(fout, " LDI 0 STA .X+1 STA .Y+1\n");
+            fprintf(fout, " PHS PHS LDA .X PHS\n");
+            fprintf(fout, " JPS .BTOW PLS\n");
+            fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+
+            fprintf(fout, " PHS PHS LDA .Y PHS\n");
+            fprintf(fout, " JPS .BTOW PLS\n");
+            fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
         }
         else if(lt == type_int() || lt->kind == TYPE_PTR)
         {
