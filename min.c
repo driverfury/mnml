@@ -12,10 +12,15 @@
  * [x] Logic AND and OR (&& ||)
  * [x] Char literals
  * [x] String literals
+ * [x] Comments
+ * [x] Typedefs
  *
  * BUG:
  * [x] Function call params order is inverted
- * [ ] while stmt is bugged?
+ * [x] while stmt is bugged? or logical exprs?
+ * [ ] Signed cast
+ * [x] Local variables are bugged. Check bugged.min
+ * [x] Comments
  *
  */
 
@@ -508,6 +513,7 @@ enum
     CHAR,
     INT,
     STRUCT,
+    TYPEDEF,
 
     RETURN,
     IF,
@@ -549,6 +555,8 @@ look(int update)
     pbackold = pback;
 
     c = getch();
+
+    /* Skip whitespaces */
     while(isspace(c))
     {
         if(c == '\n')
@@ -556,6 +564,39 @@ look(int update)
             ++newline;
         }
         c = getch();
+    }
+
+    /* Skip comments */
+    if(c == '/')
+    {
+        i = getch();
+        if(i == '/')
+        {
+            while(i != '\n' && i != EOF)
+            {
+                i = getch();
+            }
+
+            if(i == EOF)
+            {
+                return END;
+            }
+
+            /* Skip whitespaces */
+            c = i;
+            while(isspace(c))
+            {
+                if(c == '\n')
+                {
+                    ++newline;
+                }
+                c = getch();
+            }
+        }
+        else
+        {
+            putback(i);
+        }
     }
 
     if(c <= 0)
@@ -594,17 +635,18 @@ look(int update)
         putback(c);
         ident[i] = 0;
 
-             if(strcmp(ident, "var") == 0)    { tok = VAR; }
-        else if(strcmp(ident, "func") == 0)   { tok = FUNC; }
-        else if(strcmp(ident, "void") == 0)   { tok = VOID; }
-        else if(strcmp(ident, "char") == 0)   { tok = CHAR; }
-        else if(strcmp(ident, "int") == 0)    { tok = INT; }
-        else if(strcmp(ident, "struct") == 0) { tok = STRUCT; }
-        else if(strcmp(ident, "return") == 0) { tok = RETURN; }
-        else if(strcmp(ident, "if") == 0)     { tok = IF; }
-        else if(strcmp(ident, "else") == 0)   { tok = ELSE; }
-        else if(strcmp(ident, "while") == 0)  { tok = WHILE; }
-        else if(strcmp(ident, "cast") == 0)   { tok = CAST; }
+             if(strcmp(ident, "var") == 0)     { tok = VAR; }
+        else if(strcmp(ident, "func") == 0)    { tok = FUNC; }
+        else if(strcmp(ident, "void") == 0)    { tok = VOID; }
+        else if(strcmp(ident, "char") == 0)    { tok = CHAR; }
+        else if(strcmp(ident, "int") == 0)     { tok = INT; }
+        else if(strcmp(ident, "struct") == 0)  { tok = STRUCT; }
+        else if(strcmp(ident, "typedef") == 0) { tok = TYPEDEF; }
+        else if(strcmp(ident, "return") == 0)  { tok = RETURN; }
+        else if(strcmp(ident, "if") == 0)      { tok = IF; }
+        else if(strcmp(ident, "else") == 0)    { tok = ELSE; }
+        else if(strcmp(ident, "while") == 0)   { tok = WHILE; }
+        else if(strcmp(ident, "cast") == 0)    { tok = CAST; }
     }
     else if(c == '-')
     {
@@ -1071,9 +1113,13 @@ resolve_lvalue(Expr *e)
         else if(sym->kind == SYM_VAR_LOC)
         {
             fprintf(fout, " LDA .BP.%s STA .X LDA .BP.%s+1 STA .X+1\n", currfunc->name, currfunc->name);
-            if(sym->offset != 0)
+            if(sym->offset > 0)
             {
                 fprintf(fout, " LDI %d ADW .X\n", sym->offset);
+            }
+            else if(sym->offset < 0)
+            {
+                fprintf(fout, " LDI %d SBW .X\n", -sym->offset);
             }
         }
         else
@@ -1105,7 +1151,7 @@ resolve_lvalue(Expr *e)
             fprintf(stderr, "Invalid array subscription\n");
             assert(0);
         }
-        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
 
         rt = resolve_expr(e->r, type_int());
         if(rt != type_int())
@@ -1121,6 +1167,7 @@ resolve_lvalue(Expr *e)
         fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
         fprintf(fout, " PLS STA .X PLS STA .X+1\n");
 
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
         fprintf(fout, " LDA .X ADB .Y LDA .X+1 ACB .Y+1\n");
         fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
 
@@ -1282,16 +1329,19 @@ resolve_expr(Expr *e, Type *wanted)
         {
             fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n",
                 currfunc->name, currfunc->name);
-            if(sym->offset != 0)
+            if(sym->offset > 0)
             {
-                fprintf(fout, " LDI %d ADW .T", sym->offset);
+                fprintf(fout, " LDI %d ADW .T\n", sym->offset);
+            }
+            else if(sym->offset < 0)
+            {
+                fprintf(fout, " LDI %d SBW .T\n", -sym->offset);
             }
 
             if(t->kind == TYPE_ARR)
             {
-                resolve_lvalue(e);
-                t = type_ptr(t->base);
                 fprintf(fout, " LDA .T STA .X LDA .T+1 STA .X+1\n");
+                t = type_ptr(t->base);
             }
             else
             {
@@ -2336,17 +2386,14 @@ parse_decl()
             fprintf(stderr, "You cannot declare a void variable\n");
             assert(0);
         }
+        else if(type->width <= 0)
+        {
+            fprintf(stderr, "You cannot declare a void variable\n");
+            assert(0);
+        }
 
-        if(type->width == 1)
-        {
-            sym->offset = currfunc->offset;
-            currfunc->offset -= 1;
-        }
-        else
-        {
-            currfunc->offset -= (type->width - 1);
-            sym->offset = currfunc->offset;
-        }
+        sym->offset = currfunc->offset - (type->width - 1);
+        currfunc->offset -= type->width;
     }
     else
     {
@@ -2833,56 +2880,6 @@ parse_glob_decl()
         }
 
         expect('}');
-#if 0
-        expect(';');
-
-        params = 0;
-        param = 0;
-        t = peek();
-        while(t != '{')
-        {
-            tmp = parse_decl(1);
-            if(param)
-            {
-                param->next = mksym(tmp->name);
-                param = param->next;
-            }
-            else
-            {
-                param = mksym(tmp->name);
-                params = param;
-            }
-            param->next = 0;
-            param->type = tmp->type;
-
-            expect(';');
-            t = peek();
-        }
-        sym->params = params;
-
-        expect('{');
-
-        t = peek();
-        while(t == VAR)
-        {
-            parse_decl(0);
-            expect(';');
-            t = peek();
-        }
-
-        if(sym->offset != 0)
-        {
-            fprintf(fout, " LDI %d ADB 0xffff\n", sym->offset);
-        }
-
-        while(t != '}')
-        {
-            parse_stmt();
-            t = peek();
-        }
-
-        expect('}');
-#endif
 
         fprintf(fout, " PLS STA .X PLS STA .X+1\n");
         fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
@@ -2958,6 +2955,15 @@ parse_glob_decl()
             sym->type->width += memb->type->width;
             memb = memb->next;
         }
+    }
+    else if(t == TYPEDEF)
+    {
+        expect(IDENT);
+        sym = addsym(ident);
+        sym->kind = SYM_TYPE;
+        expect(':');
+        sym->type = parse_typespec();
+        expect(';');
     }
     else
     {

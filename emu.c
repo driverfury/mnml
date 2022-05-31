@@ -853,6 +853,13 @@ emu_mem_read(u16 addr)
 void
 emu_mem_write(u8 b, u16 addr)
 {
+    /* DEBUG */
+    if(addr == 0xf3)
+    {
+        printf("WROOONG %04x\n", emu.pc);
+        assert(0);
+    }
+
     emu_mem[addr] = b;
 }
 
