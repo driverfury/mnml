@@ -18,6 +18,15 @@
  * [ ] Multiplication operator
  * [ ] Division operator
  * [ ] Logical NOT (!)
+ * [x] Eval const expr
+ * [/] Better resolve_expr function
+ * [x] Constants
+ * [ ] Enums
+ * [ ] What about structs as:
+ *       - return value: this is how gcc solves it, the caller reserve space for the
+ *         struct return value, then it pushes a pointer to it instead of the entire struct.
+ *         When the callee returns, the struct whose address is pushed gets modified.
+ *       - params: the struct is pushed entirely onto the stack
  *
  * BUG:
  * [x] Function call params order is inverted
@@ -269,6 +278,7 @@ enum
     SYM_VAR,
     SYM_FUNC,
     SYM_VAR_LOC,
+    SYM_CONST,
 };
 
 typedef struct
@@ -280,6 +290,7 @@ Sym
     struct Sym *params;
     int offset;
     int poffset;
+    int val;
     struct Sym *next;
 } Sym;
 
@@ -515,6 +526,7 @@ enum
 
     VAR,
     FUNC,
+    CONST,
 
     VOID,
     CHAR,
@@ -644,6 +656,7 @@ look(int update)
 
              if(strcmp(ident, "var") == 0)     { tok = VAR; }
         else if(strcmp(ident, "func") == 0)    { tok = FUNC; }
+        else if(strcmp(ident, "const") == 0)   { tok = CONST; }
         else if(strcmp(ident, "void") == 0)    { tok = VOID; }
         else if(strcmp(ident, "char") == 0)    { tok = CHAR; }
         else if(strcmp(ident, "int") == 0)     { tok = INT; }
@@ -1019,18 +1032,140 @@ mkexprbin(int kind, Expr *l, Expr *r)
 Expr *parse_expr();
 
 int
+isconstexpr(Expr *e)
+{
+    int res;
+    Sym *sym;
+
+    res = 0;
+    if(e->kind == EXPR_INTLIT)
+    {
+        res = 1;
+    }
+    else if(e->kind == EXPR_ID)
+    {
+        sym = lookup(e->id);
+        if(!sym || sym->kind != SYM_CONST)
+        {
+            res = 0;
+        }
+        else
+        {
+            res = 1;
+        }
+    }
+    else if(e->kind == EXPR_NEG)    { res = isconstexpr(e->l); }
+    else if(e->kind == EXPR_MUL)    { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_DIV)    { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_MOD)    { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_ADD)    { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_SUB)    { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_LESS)   { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_LESSEQ) { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_GRTR)   { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_GRTREQ) { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_EQ)     { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_NEQ)    { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_AND)    { res = isconstexpr(e->l) && isconstexpr(e->r); }
+    else if(e->kind == EXPR_OR)     { res = isconstexpr(e->l) && isconstexpr(e->r); }
+
+    return(res);
+}
+
+int
 evalexpr(Expr *e)
 {
     int val;
+    Sym *sym;
 
     val = 0;
     if(e->kind == EXPR_INTLIT)
     {
         val = e->val;
     }
+    else if(e->kind == EXPR_ID)
+    {
+        sym = lookup(e->id);
+        if(!sym || sym->kind != SYM_CONST)
+        {
+            fprintf(stderr, "Invalid symbol %s in expression\n", e->id);
+            assert(0);
+        }
+
+        val = sym->val;
+    }
+    else if(e->kind == EXPR_NEG)
+    {
+        val = -evalexpr(e->l);
+    }
+    else if(e->kind == EXPR_MUL)
+    {
+        val = evalexpr(e->l) * evalexpr(e->r);
+    }
+    else if(e->kind == EXPR_DIV)
+    {
+        val = evalexpr(e->l) / evalexpr(e->r);
+    }
+    else if(e->kind == EXPR_MOD)
+    {
+        val = evalexpr(e->l) % evalexpr(e->r);
+    }
+    else if(e->kind == EXPR_ADD)
+    {
+        val = evalexpr(e->l) + evalexpr(e->r);
+    }
+    else if(e->kind == EXPR_SUB)
+    {
+        val = evalexpr(e->l) - evalexpr(e->r);
+    }
+    else if(e->kind == EXPR_LESS)
+    {
+        val = (evalexpr(e->l) < evalexpr(e->r)) ? 0xff : 0;
+    }
+    else if(e->kind == EXPR_LESSEQ)
+    {
+        val = (evalexpr(e->l) <= evalexpr(e->r)) ? 0xff : 0;
+    }
+    else if(e->kind == EXPR_GRTR)
+    {
+        val = (evalexpr(e->l) > evalexpr(e->r)) ? 0xff : 0;
+    }
+    else if(e->kind == EXPR_GRTREQ)
+    {
+        val = (evalexpr(e->l) >= evalexpr(e->r)) ? 0xff : 0;
+    }
+    else if(e->kind == EXPR_EQ)
+    {
+        val = (evalexpr(e->l) == evalexpr(e->r)) ? 0xff : 0;
+    }
+    else if(e->kind == EXPR_NEQ)
+    {
+        val = (evalexpr(e->l) != evalexpr(e->r)) ? 0xff : 0;
+    }
+    else if(e->kind == EXPR_AND)
+    {
+        if(evalexpr(e->l) != 0 && evalexpr(e->r) != 0)
+        {
+            val = 0xff;
+        }
+        else
+        {
+            val = 0;
+        }
+    }
+    else if(e->kind == EXPR_OR)
+    {
+        if(evalexpr(e->l) != 0 || evalexpr(e->r) != 0)
+        {
+            val = 0xff;
+        }
+        else
+        {
+            val = 0;
+        }
+    }
     else
     {
-        fprintf(stderr, "Invalid constant expression\n");
         assert(0);
     }
 
@@ -1044,6 +1179,7 @@ parse_typespec()
     Sym *sym;
     int t;
     int len;
+    Expr *e;
 
     res = 0;
     t = next();
@@ -1083,7 +1219,12 @@ parse_typespec()
     if(t == '[')
     {
         expect('[');
-        len = evalexpr(parse_expr());
+        e = parse_expr();
+        if(!isconstexpr(e))
+        {
+            fprintf(stderr, "Invalid constant expression as array length\n");
+        }
+        len = evalexpr(e);
         expect(']');
 
         res = type_array(res, len);
@@ -1251,6 +1392,257 @@ resolve_lvalue(Expr *e)
 
     return(t);
 }
+
+#if 1
+
+Type *
+resolve_expr(Expr *e, Type *wanted)
+{
+    Type *t;
+    Sym *sym;
+    Expr *tmpexpr;
+
+    t = 0;
+    if(isconstexpr(e))
+    {
+        tmpexpr = mkexprint(evalexpr(e));
+        t = resolve_expr(tmpexpr, wanted);
+        free(tmpexpr);
+    }
+    else if(e->kind == EXPR_INTLIT)
+    {
+        if(e->val > 0xff)
+        {
+            t = type_int();
+            fprintf(fout, " LDI %d STA .X LDI %d STA .X+1\n",
+                (e->val&0xff), ((e->val>>8)&0xff));
+        }
+        else
+        {
+            t = type_char();
+            fprintf(fout, " LDI %d STA .X\n");
+        }
+
+        if(t == type_int() && wanted == type_char())
+        {
+            fprintf(stderr, "Integer overflow, char > 255\n");
+            assert(0);
+        }
+    }
+    else if(e->kind == EXPR_STRLIT)
+    {
+        fprintf(fout, " LDI <%s STA .X LDI >%s STA .X+1\n", e->id, e->id);
+        t = type_ptr(type_char());
+    }
+    else if(e->kind == EXPR_ID)
+    {
+        sym = lookup(e->id);
+        if(!sym)
+        {
+            fprintf(stderr, "Invalid symbol %s in expression\n", e->id);
+            assert(0);
+        }
+
+        t = sym->type;
+
+        if(sym->kind == SYM_VAR)
+        {
+            if(t == type_char())
+            {
+                fprintf(fout, " LDA %s STA .X\n", sym->name);
+            }
+            else if(t == type_int() || t->kind == TYPE_PTR)
+            {
+                fprintf(fout, " LDA %s STA .X LDA %s+1 STA .X+1\n", sym->name, sym->name);
+            }
+            else if(t->kind == TYPE_ARR)
+            {
+                resolve_lvalue(e);
+                t = type_ptr(t->base);
+            }
+            else
+            {
+                resolve_lvalue(e);
+            }
+        }
+        else if(sym->kind == SYM_VAR_LOC)
+        {
+            fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n",
+                currfunc->name, currfunc->name);
+            if(sym->offset > 0)
+            {
+                fprintf(fout, " LDI %d ADW .T\n", sym->offset);
+            }
+            else if(sym->offset < 0)
+            {
+                fprintf(fout, " LDI %d SBW .T\n", -sym->offset);
+            }
+
+            if(t == type_char())
+            {
+                fprintf(fout, " LDR .T STA .X\n");
+            }
+            else if(t == type_int() || t->kind == TYPE_PTR)
+            {
+                fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
+            }
+            else if(t->kind == TYPE_ARR)
+            {
+                fprintf(fout, " LDA .T STA .X LDA .T+1 STA .X+1\n");
+                t = type_ptr(t->base);
+            }
+            else
+            {
+                resolve_lvalue(e);
+            }
+        }
+        else if(sym->kind == SYM_CONST)
+        {
+            tmpexpr = mkexprint(sym->val);
+            t = resolve_expr(tmpexpr, wanted);
+            free(tmpexpr);
+        }
+        else
+        {
+            fprintf(stderr, "Invalid var or const %s in expression\n", sym->name);
+            assert(0);
+        }
+    }
+    else if(e->kind == EXPR_CALL)
+    {
+        if(e->l->kind != EXPR_ID)
+        {
+            fprintf(stderr, "Invalid function call\n");
+            assert(0);
+        }
+
+        sym = lookup(e->l->id);
+        if(!sym || sym->kind != SYM_FUNC)
+        {
+            fprintf(stderr, "Cannot call a non-function\n");
+            assert(0);
+        }
+
+        if(sym->type->width > 0)
+        {
+            fprintf(fout, " LDI %d SBB 0xffff\n", sym->type->width);
+        }
+
+        paramsz = 0;
+        param = sym->params;
+        arg = e->r;
+        while(arg)
+        {
+            if(!param)
+            {
+                fprintf(stderr, "Invalid param for function %s\n", sym->name);
+                assert(0);
+            }
+
+            lt = resolve_expr(arg, param->type);
+            if(lt != param->type)
+            {
+                fprintf(stderr, "Function %s param type mismatch\n", sym->name);
+                assert(0);
+            }
+
+            assert(lt->width > 0);
+
+            /* TODO: HERE */
+            /* TODO: What about types with width > 1 */
+            /**
+             * TODO: Should we check based on width or on type_char()/type_int(), etc..?
+             * Problem 1: if width > 2 (for example a struct), you push the whole
+             * struct onto the stack, but when you retrieve the return value you can't
+             * save it into X since X is only 2 bytes. How to solve this?
+             * Problem 2: the arrays must be pushed ALWAYS by reference (decay to pointers),
+             * to solve this problem with need 2 things:
+             *   - Array to ptr decay in resolve_expr of EXPR_ID
+             *   - Array to ptr decay of the function param: every function param that is
+             *     declared as array must be set to a pointer.
+             * Problem 3: when t is array but its width is <= 2, you must push its addres
+             * not its content.
+             */
+            if(lt == type_char())
+            {
+                fprintf(fout, " LDA .X PHS\n");
+            }
+            else if(lt == type_int())
+            {
+                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+            }
+            else if(lt->kind == TYPE_PTR || lt->kind == TYPE_ARR)
+            {
+                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+            }
+            else
+            {
+                fprintf(stderr, "Cannot push structs onto the stack yet\n");
+                assert(0);
+            }
+
+            paramsz += lt->width;
+            param = param->next;
+            arg = arg->next;
+        }
+
+        if(param)
+        {
+            fprintf(stderr, "Invalid num of arguments for function %s\n", sym->name);
+            assert(0);
+        }
+
+        fprintf(fout, " JPS %s\n", sym->name);
+
+        if(paramsz > 0)
+        {
+            fprintf(fout, " LDI %d ADB 0xffff\n", paramsz);
+        }
+
+        if(sym->type != type_void())
+        {
+            /* Nothing */
+        }
+        if(sym->type == type_char())
+        {
+            fprintf(fout, " PLS STA .X\n");
+        }
+        else if(sym->type == type_int())
+        {
+            fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+        }
+        else if(sym->type->kind == TYPE_PTR || sym->type->kind == TYPE_ARR)
+        {
+            fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+        }
+        else
+        {
+            fprintf(stderr, "Cannot pop structs from the stack yet\n");
+            assert(0);
+        }
+
+        t = sym->type;
+    }
+    else
+    {
+        fprintf(stderr, "Cannot resolve the expression\n");
+        assert(0);
+    }
+
+    if(t == type_char() && wanted == type_int())
+    {
+        /* Implicit cast */
+        fprintf(fout, " PHS PHS LDA .X PHS\n");
+        fprintf(fout, " JPS .BTOW PLS\n");
+        fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+    }
+
+    assert(t);
+
+    return(t);
+}
+
+#else
 
 Type *
 resolve_expr(Expr *e, Type *wanted)
@@ -2109,6 +2501,8 @@ resolve_expr(Expr *e, Type *wanted)
     return(t);
 }
 
+#endif
+
 Expr *
 revargs(Expr *args)
 {
@@ -2450,13 +2844,16 @@ parse_param()
     sym->kind = SYM_VAR_LOC;
     expect(':');
     type = parse_typespec();
-    sym->type = type;
-
     if(type == type_void())
     {
         fprintf(stderr, "Invalid void type param\n");
         assert(0);
     }
+    else if(type->kind == TYPE_ARR)
+    {
+        type = type_ptr(type->base);
+    }
+    sym->type = type;
 
     sym->offset = currfunc->poffset;
     currfunc->poffset += type->width;
@@ -2874,6 +3271,7 @@ parse_glob_decl()
     SMemb *members;
     SMemb *memb;
     char buff[MAX_IDENT_LEN+1];
+    Expr *e;
 
     t = next();
     if(t == VAR)
@@ -2994,6 +3392,21 @@ parse_glob_decl()
         fprintf(fout, ".Z.%s: 0x00 0xff\n", currfunc->name);
 
         cut(currfunc);
+    }
+    else if(t == CONST)
+    {
+        expect(IDENT);
+        sym = addsym(ident);
+        sym->kind = SYM_CONST;
+        expect('=');
+        e = parse_expr();
+        if(!isconstexpr(e))
+        {
+            fprintf(stderr, "Invalid const expr for const '%s'\n", sym->name);
+            assert(0);
+        }
+        sym->val = evalexpr(e);
+        expect(';');
     }
     else if(t == STRUCT)
     {

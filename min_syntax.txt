@@ -1,5 +1,6 @@
 VAR = 'var'
 FUNC = 'func'
+CONST = 'const'
 
 VOID = 'void'
 CHAR = 'char'
@@ -29,6 +30,7 @@ STRLIT = '"' .* '"'
 
 <glob_decl> = VAR IDENT ':' <typespec> ';'
             | FUNC IDENT '(' <params>? ')' ':' <typespec> '{' (<decl> ',')* <stmt>* '}'
+            | CONST IDENT '=' <expr> ';'
             | STRUCT IDENT <struct_def>
             | TYPEDEF IDENT ':' <typespec> ';'
 
