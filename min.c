@@ -2990,20 +2990,47 @@ regmul(char *x, char *y)
     fprintf(fout, " LDA X");
 }
 
+void
+usage(char *exe)
+{
+    printf("USAGE:\n %s <source.min> [<output.bin>]\n", exe);
+}
+
 int
-main()
+main(int argc, char *argv[])
 {
     Sym *sym;
     Sym *param;
     int i;
 
-    fin = fopen("test.min", "r");
+    if(argc < 2)
+    {
+        usage(argv[0]);
+        return(1);
+    }
+
+    fin = fopen(argv[1], "r");
+    if(!fin)
+    {
+        fprintf(stderr, "Cannot open input file '%s' in read mode\n", argv[1]);
+        return(2);
+    }
+
+    if(argc > 2)
+    {
+        fout = fopen(argv[2], "w");
+        if(!fout)
+        {
+            fprintf(stderr, "Cannot open input file '%s' in write mode\n", argv[2]);
+            return(2);
+        }
+    }
+    else
+    {
+        fout = stdout;
+    }
+
     fstr = fopen("test.str.asm", "w");
-#ifdef GDB
-    fout = fopen("test.asm", "w");
-#else
-    fout = stdout;
-#endif
     line = 1;
 
     /* std lib */
@@ -3059,9 +3086,10 @@ main()
     }
     fclose(fstr);
 
-#ifdef GDB
-    fclose(fout);
-#endif
+    if(fout != stdout)
+    {
+        fclose(fout);
+    }
 
     return(0);
 }
