@@ -15,11 +15,13 @@
  * [x] Comments
  * [x] Typedefs
  * [x] Modulo operator
- * [ ] Multiplication operator
+ * [x] Multiplication operator
  * [ ] Division operator
+ *     [ ] Byte division
+ *     [ ] Word division
  * [ ] Logical NOT (!)
  * [x] Eval const expr
- * [/] Better resolve_expr function
+ * [x] Better resolve_expr function
  * [x] Constants
  * [ ] Enums
  * [ ] What about structs as:
@@ -34,7 +36,7 @@
  * [x] Signed cast
  * [x] Local variables are bugged. Check bugged.min
  * [x] Comments
- * [ ] Complex expressions like 97 + 7%15
+ * [x] Complex expressions like 97 + 7%15
  *     97 gets stored in X, then Y <- X
  *     But when resolving the right operand, Y gets overwritten.
  *     Solution: push the temp result onto the stack.
@@ -242,25 +244,34 @@ type_struct(SMemb *members)
 }
 
 void
-print_type(Type *type)
+fprint_type(FILE *f, Type *type)
 {
     if(type == type_void())
     {
-        printf("void");
+        fprintf(f, "void");
     }
     else if(type == type_char())
     {
-        printf("char");
+        fprintf(f, "char");
     }
     else if(type == type_int())
     {
-        printf("int");
+        fprintf(f, "int");
     }
     else if(type->kind == TYPE_PTR)
     {
-        printf("[");
-        print_type(type->base);
-        printf("]");
+        fprintf(f, "[");
+        fprint_type(f, type->base);
+        fprintf(f, "]");
+    }
+    else if(type->kind == TYPE_ARR)
+    {
+        fprint_type(f, type->base);
+        fprintf(f, "[%d]", type->len);
+    }
+    else if(type->kind == TYPE_STRUCT)
+    {
+        fprintf(f, "struct");
     }
     else
     {
@@ -1284,6 +1295,7 @@ resolve_lvalue(Expr *e)
         if(t->kind != TYPE_PTR)
         {
             fprintf(stderr, "Cannot dereference a non-pointer\n");
+            assert(0);
         }
 
         fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
@@ -1384,7 +1396,7 @@ resolve_lvalue(Expr *e)
     }
     else
     {
-        /* TODO: HERE */
+        fprintf(stderr, "Invalid lvalue\n");
         assert(0);
     }
 
@@ -1393,23 +1405,23 @@ resolve_lvalue(Expr *e)
     return(t);
 }
 
-#if 1
-
 Type *
 resolve_expr(Expr *e, Type *wanted)
 {
     Type *t;
+    Type *lt;
+    Type *rt;
     Sym *sym;
     Expr *tmpexpr;
+    SMemb *memb;
+    int lbl1;
+    int lbl2;
+    Expr *arg;
+    Sym *param;
+    int paramsz;
 
     t = 0;
-    if(isconstexpr(e))
-    {
-        tmpexpr = mkexprint(evalexpr(e));
-        t = resolve_expr(tmpexpr, wanted);
-        free(tmpexpr);
-    }
-    else if(e->kind == EXPR_INTLIT)
+    if(e->kind == EXPR_INTLIT)
     {
         if(e->val > 0xff)
         {
@@ -1420,7 +1432,7 @@ resolve_expr(Expr *e, Type *wanted)
         else
         {
             t = type_char();
-            fprintf(fout, " LDI %d STA .X\n");
+            fprintf(fout, " LDI %d STA .X\n", (e->val&0xff));
         }
 
         if(t == type_int() && wanted == type_char())
@@ -1428,6 +1440,12 @@ resolve_expr(Expr *e, Type *wanted)
             fprintf(stderr, "Integer overflow, char > 255\n");
             assert(0);
         }
+    }
+    else if(isconstexpr(e))
+    {
+        tmpexpr = mkexprint(evalexpr(e));
+        t = resolve_expr(tmpexpr, wanted);
+        free(tmpexpr);
     }
     else if(e->kind == EXPR_STRLIT)
     {
@@ -1548,8 +1566,7 @@ resolve_expr(Expr *e, Type *wanted)
 
             assert(lt->width > 0);
 
-            /* TODO: HERE */
-            /* TODO: What about types with width > 1 */
+            /* TODO: What about types with width > 2 */
             /**
              * TODO: Should we check based on width or on type_char()/type_int(), etc..?
              * Problem 1: if width > 2 (for example a struct), you push the whole
@@ -1623,277 +1640,56 @@ resolve_expr(Expr *e, Type *wanted)
 
         t = sym->type;
     }
-    else
-    {
-        fprintf(stderr, "Cannot resolve the expression\n");
-        assert(0);
-    }
-
-    if(t == type_char() && wanted == type_int())
-    {
-        /* Implicit cast */
-        fprintf(fout, " PHS PHS LDA .X PHS\n");
-        fprintf(fout, " JPS .BTOW PLS\n");
-        fprintf(fout, " PLS STA .X PLS STA .X+1\n");
-    }
-
-    assert(t);
-
-    return(t);
-}
-
-#else
-
-Type *
-resolve_expr(Expr *e, Type *wanted)
-{
-    Type *t;
-    Type *lt;
-    Type *rt;
-    Sym *sym;
-    Expr *arg;
-    Sym *param;
-    int paramsz;
-    SMemb *memb;
-    char *ins;
-    int lbl1;
-    int lbl2;
-
-    assert(e);
-
-    t = 0;
-    if(e->kind == EXPR_INTLIT)
-    {
-        if(e->val > 0xff)
-        {
-            t = type_int();
-        }
-        else
-        {
-            t = type_char();
-        }
-
-        if(t == type_char() && wanted == type_int())
-        {
-            t = type_int();
-        }
-        else if(t == type_int() && wanted == type_char())
-        {
-            fprintf(stderr, "Integer overflow, char > 255\n");
-            assert(0);
-        }
-
-        fprintf(fout, " LDI %d STA .X LDI %d STA .X+1\n", (e->val&0xff), ((e->val>>8)&0xff));
-    }
-    else if(e->kind == EXPR_STRLIT)
-    {
-        fprintf(fout, " LDI <%s STA .X LDI >%s STA .X+1\n", e->id, e->id);
-        t = type_ptr(type_char());
-    }
-    else if(e->kind == EXPR_ID)
-    {
-        sym = lookup(e->id);
-        if(!sym)
-        {
-            fprintf(stderr, "Invalid symbol %s in expression\n", e->id);
-            assert(0);
-        }
-
-        t = sym->type;
-
-        if(sym->kind == SYM_VAR)
-        {
-            if(t->kind == TYPE_ARR)
-            {
-                resolve_lvalue(e);
-                t = type_ptr(t->base);
-            }
-            else
-            {
-                if(t->width == 1)
-                {
-                    fprintf(fout, " LDA %s STA .X LDI 0 STA .X+1\n", sym->name);
-                }
-                else if(t->width == 2)
-                {
-                    fprintf(fout, " LDA %s STA .X LDA %s+1 STA .X+1\n", sym->name, sym->name);
-                }
-                else
-                {
-                    assert(0);
-                }
-            }
-        }
-        else if(sym->kind == SYM_VAR_LOC)
-        {
-            fprintf(fout, " LDA .BP.%s STA .T LDA .BP.%s+1 STA .T+1\n",
-                currfunc->name, currfunc->name);
-            if(sym->offset > 0)
-            {
-                fprintf(fout, " LDI %d ADW .T\n", sym->offset);
-            }
-            else if(sym->offset < 0)
-            {
-                fprintf(fout, " LDI %d SBW .T\n", -sym->offset);
-            }
-
-            if(t->kind == TYPE_ARR)
-            {
-                fprintf(fout, " LDA .T STA .X LDA .T+1 STA .X+1\n");
-                t = type_ptr(t->base);
-            }
-            else
-            {
-                if(t->width == 1)
-                {
-                    fprintf(fout, " LDR .T STA .X\n");
-                }
-                else if(t->width == 2)
-                {
-                    fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
-                }
-                else
-                {
-                    assert(0);
-                }
-            }
-        }
-        else
-        {
-            fprintf(stderr, "Invalid var or const %s in expression\n", sym->name);
-            assert(0);
-        }
-    }
-    else if(e->kind == EXPR_CALL)
-    {
-        if(e->l->kind != EXPR_ID)
-        {
-            fprintf(stderr, "Invalid function call\n");
-            assert(0);
-        }
-
-        sym = lookup(e->l->id);
-        if(!sym || sym->kind != SYM_FUNC)
-        {
-            fprintf(stderr, "Cannot call a non-function\n");
-            assert(0);
-        }
-
-        if(sym->type->width > 0)
-        {
-            fprintf(fout, " ;reserve space for ret %s\n", sym->name);
-            fprintf(fout, " LDI %d SBB 0xffff\n", sym->type->width);
-        }
-
-        paramsz = 0;
-        param = sym->params;
-        arg = e->r;
-        while(arg)
-        {
-            if(!param)
-            {
-                fprintf(stderr, "Invalid param for function %s\n", sym->name);
-                assert(0);
-            }
-
-            lt = resolve_expr(arg, param->type);
-            if(lt != param->type)
-            {
-                fprintf(stderr, "Function %s param type mismatch\n", sym->name);
-                assert(0);
-            }
-
-            fprintf(fout, " ;push param %s\n", param->name);
-            if(lt->width == 1)
-            {
-                fprintf(fout, " LDA .X PHS\n");
-            }
-            else if(lt->width == 2)
-            {
-                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
-            }
-            else
-            {
-                assert(0);
-            }
-
-            paramsz += lt->width;
-            param = param->next;
-            arg = arg->next;
-        }
-
-        if(param)
-        {
-            fprintf(stderr, "Invalid num of arguments for function %s\n", sym->name);
-            assert(0);
-        }
-
-        fprintf(fout, " ;call %s\n", sym->name);
-        fprintf(fout, " JPS %s\n", sym->name);
-
-        if(paramsz > 0)
-        {
-            fprintf(fout, " LDI %d ADB 0xffff\n", paramsz);
-        }
-
-        if(sym->type->width > 0)
-        {
-            if(sym->type->width == 1)
-            {
-                fprintf(fout, " PLS STA .X\n");
-            }
-            else if(sym->type->width == 2)
-            {
-                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
-            }
-            else
-            {
-                /* TODO: What if the return type size is > 2? */
-                assert(0);
-            }
-        }
-
-        t = sym->type;
-    }
     else if(e->kind == EXPR_ARR)
     {
-        lt = resolve_lvalue(e->l);
-        if(lt->kind != TYPE_ARR && lt->kind != TYPE_PTR)
+        lt = resolve_expr(e->l, 0);
+        if(lt->kind != TYPE_PTR && lt->kind == TYPE_ARR)
         {
-            fprintf(stderr, "Invalid array subscription\n");
+            fprintf(stderr, "Invalid use of the subscription operator");
             assert(0);
         }
-        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        else if(lt->base != type_void())
+        {
+            fprintf(stderr, "Invalid use of the subscription operator");
+            assert(0);
+        }
+
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
 
         rt = resolve_expr(e->r, type_int());
-        if(rt != type_int())
+        if(rt != type_char() && rt != type_int())
         {
-            fprintf(stderr, "Invalid array subscription\n");
+            fprintf(stderr, "Invalid subscription right operand");
             assert(0);
         }
 
-        assert(lt->base->width > 0 && lt->base->width < 256);
+        /* TODO: Handle this case? (width > 128, we need i16 to store it) */
+        assert(lt->base->width > 0 && lt->base->width < 128);
+
         fprintf(fout, " PHS PHS\n");
         fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
         fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
         fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
         fprintf(fout, " PLS STA .X PLS STA .X+1\n");
 
-        fprintf(fout, " LDA .X ADB .Y LDA .X+1 ACB .Y+1\n");
-        fprintf(fout, " LDA .Y STA .T LDA .Y+1 STA .T+1\n");
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+        fprintf(fout, " LDA .Y ADB .X LDA .Y+1 ACB .X+1\n");
 
         t = lt->base;
-        if(t->width == 1)
+        if(t == type_char())
         {
-            fprintf(fout, " LDR .T STA .X\n");
+            fprintf(fout, " LDR .X STA .X\n");
         }
-        else if(t->width == 2)
+        else if(t == type_int() || t->kind == TYPE_PTR || t->kind == TYPE_ARR)
         {
-            fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
+            fprintf(fout, " LDR .X STA .Y INW .X LDR .X STA .Y+1\n");
+            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
         }
         else
         {
-            assert(0);
+            /* NOTE: If it's a struct, the address il already computed,
+             * we don't need to do anything.
+             */
         }
     }
     else if(e->kind == EXPR_SMEMB)
@@ -1901,13 +1697,13 @@ resolve_expr(Expr *e, Type *wanted)
         lt = resolve_lvalue(e->l);
         if(lt->kind != TYPE_STRUCT)
         {
-            fprintf(stderr, "Cannot access a member of a non-struct\n");
+            fprintf(stderr, "Access operator used on a non-struct");
             assert(0);
         }
 
         if(e->r->kind != EXPR_ID)
         {
-            fprintf(stderr, "Invalid struct member access\n");
+            fprintf(stderr, "Invalid usage of access operator");
             assert(0);
         }
 
@@ -1920,42 +1716,47 @@ resolve_expr(Expr *e, Type *wanted)
 
         if(memb->offset != 0)
         {
-            assert(memb->offset > 0 && memb->offset < 256);
+            /* TODO: Handle this case? (width > 128, we need i16 to store it) */
+            assert(memb->offset > 0 && memb->offset < 128);
             fprintf(fout, " LDI %d ADW .X\n", memb->offset);
         }
 
-        fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
-        if(memb->type->width == 1)
+        t = memb->type;
+        if(t == type_char())
         {
-            fprintf(fout, " LDR .T STA .X\n");
+            fprintf(fout, " LDR .X STA .X\n");
         }
-        else if(memb->type->width == 2)
+        else if(t == type_int() || t->kind == TYPE_PTR || t->kind == TYPE_ARR)
         {
-            fprintf(fout, " LDR .T STA .X INW .T LDR .T STA .X+1\n");
+            fprintf(fout, " LDR .X STA .Y INW .X LDR .X STA .Y+1\n");
+            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
         }
         else
         {
-            assert(0);
+            /* NOTE: If it's a struct, the address il already computed,
+             * we don't need to do anything.
+             */
         }
-
-        t = memb->type;
     }
     else if(e->kind == EXPR_SPMEMB)
     {
-        lt = resolve_expr(e->l, 0);
+        lt = resolve_lvalue(e->l);
         if(lt->kind != TYPE_PTR || lt->base->kind != TYPE_STRUCT)
         {
-            fprintf(stderr, "Cannot access a member of a non-struct-ptr\n");
+            fprintf(stderr, "Access operator used on a non-struct");
             assert(0);
         }
+        fprintf(fout, " LDR .X STA .Y INW .X LDR .X STA .Y+1\n");
+        fprintf(fout, " LDA .Y STA .X LDR .Y+1 STA .X+1\n");
+        lt = lt->base;
 
         if(e->r->kind != EXPR_ID)
         {
-            fprintf(stderr, "Invalid struct member access\n");
+            fprintf(stderr, "Invalid usage of access operator");
             assert(0);
         }
 
-        memb = getsmemb(lt->base, e->r->id);
+        memb = getsmemb(lt, e->r->id);
         if(!memb)
         {
             fprintf(stderr, "Invalid struct member %s\n", e->r->id);
@@ -1964,41 +1765,38 @@ resolve_expr(Expr *e, Type *wanted)
 
         if(memb->offset != 0)
         {
-            assert(memb->offset > 0 && memb->offset < 256);
+            /* TODO: Handle this case? (width > 128, we need i16 to store it) */
+            assert(memb->offset > 0 && memb->offset < 128);
             fprintf(fout, " LDI %d ADW .X\n", memb->offset);
-        }
-        fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
-
-        if(memb->type->width == 1)
-        {
-            fprintf(fout, " LDR .T STA .X\n");
-        }
-        else if(memb->type->width == 2)
-        {
-            fprintf(fout, " LDR .T STA .X INW .T LDT .T STA .X+1\n");
-        }
-        else
-        {
-            assert(0);
         }
 
         t = memb->type;
+        if(t == type_char())
+        {
+            fprintf(fout, " LDR .X STA .X\n");
+        }
+        else if(t == type_int() || t->kind == TYPE_PTR || t->kind == TYPE_ARR)
+        {
+            fprintf(fout, " LDR .X STA .Y INW .X LDR .X STA .Y+1\n");
+            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
+        }
+        else
+        {
+            /* NOTE: If it's a struct, the address il already computed,
+             * we don't need to do anything.
+             */
+        }
     }
     else if(e->kind == EXPR_NEG)
     {
         lt = resolve_expr(e->l, 0);
-        if(lt != type_char() && lt != type_int())
-        {
-            fprintf(stderr, "Cannot negate a non-arithmetic type\n");
-            assert(0);
-        }
 
         t = lt;
-        if(t->width == 1)
+        if(t == type_char())
         {
             fprintf(fout, " LDA .X NEG STA .X\n");
         }
-        else if(t->width == 2)
+        else if(t == type_int())
         {
             fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
             fprintf(fout, " LDI 0 STA .X STA .X+1\n");
@@ -2006,31 +1804,35 @@ resolve_expr(Expr *e, Type *wanted)
         }
         else
         {
+            fprintf(stderr, "Cannot negate a non-arithmetic type\n");
             assert(0);
         }
     }
     else if(e->kind == EXPR_DER)
     {
-        lt = resolve_lvalue(e->l);
+        lt = resolve_expr(e->l, 0);
+
         if(lt->kind != TYPE_PTR)
         {
-            fprintf(stderr, "Cannot dereference a non-pointer");
+            fprintf(stderr, "Cannot dereference a non-pointer\n");
+            assert(0);
         }
-        t = lt->base;
 
-        if(t->width == 1)
+        t = lt->base;
+        if(t == type_char())
         {
-            fprintf(fout, " LDR .X STA .T\n");
-            fprintf(fout, " LDA .T STA .X\n");
+            fprintf(fout, " LDR .X STA .X\n");
         }
-        else if(t->width == 2)
+        else if(t == type_int() || t->kind == TYPE_PTR || t->kind == TYPE_ARR)
         {
-            fprintf(fout, " LDR .X STA .T INW .X LDR .X STA .T+1\n");
-            fprintf(fout, " LDA .T STA .X LDA .T+1 STA .X+1\n");
+            fprintf(fout, " LDR .X STA .Y INW .X LDR .X STA .Y+1\n");
+            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
         }
         else
         {
-            assert(0);
+            /* NOTE: If it's a struct, the address il already computed,
+             * we don't need to do anything.
+             */
         }
     }
     else if(e->kind == EXPR_ADR)
@@ -2064,382 +1866,412 @@ resolve_expr(Expr *e, Type *wanted)
             else
             {
                 fprintf(fout, "Invalid cast operation\n");
+                assert(0);
             }
         }
     }
     else if(e->kind == EXPR_MUL)
     {
-        /* TODO: HERE */
-        assert(0);
+        lt = resolve_expr(e->l, 0);
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+        rt = resolve_expr(e->r, lt);
+
+        if(lt != rt)
+        {
+            fprintf(stderr, "Type mismatch in arithmetic operation: multiplication\n");
+            assert(0);
+        }
+
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+
+        t = lt;
+        if(t == type_char())
+        {
+            fprintf(fout, " PHS\n");
+            fprintf(fout, " LDA .X PHS\n");
+            fprintf(fout, " LDA .Y PHS\n");
+            fprintf(fout, " JPS .BMUL PLS PLS\n");
+            fprintf(fout, " PLS STA .X\n");
+        }
+        else if(t == type_int())
+        {
+            fprintf(fout, " PHS PHS\n");
+            fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+            fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+            fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+            fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+        }
+        else
+        {
+            fprintf(stderr, "Multiplication used on non-arithmetic type\n");
+            assert(0);
+        }
     }
     else if(e->kind == EXPR_DIV)
     {
-        /* TODO: HERE */
-        assert(0);
+        lt = resolve_expr(e->l, 0);
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+        rt = resolve_expr(e->r, lt);
+
+        if(lt != rt)
+        {
+            fprintf(stderr, "Type mismatch in arithmetic operation: division\n");
+            assert(0);
+        }
+
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+
+        t = lt;
+        if(t == type_char())
+        {
+            fprintf(fout, " PHS\n");
+            fprintf(fout, " LDA .X PHS\n");
+            fprintf(fout, " LDA .Y PHS\n");
+            fprintf(fout, " JPS .BDIV PLS PLS\n");
+            fprintf(fout, " PLS STA .X\n");
+        }
+        else if(t == type_int())
+        {
+            fprintf(fout, " PHS PHS\n");
+            fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+            fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+            fprintf(fout, " JPS .WDIV PLS PLS PLS PLS\n");
+            fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+        }
+        else
+        {
+            fprintf(stderr, "Division used on non-arithmetic type\n");
+            assert(0);
+        }
     }
     else if(e->kind == EXPR_MOD)
     {
         lt = resolve_expr(e->l, 0);
-        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
         rt = resolve_expr(e->r, lt);
 
-        if(lt->kind == TYPE_PTR || rt->kind == TYPE_PTR)
+        if(lt != rt)
         {
-            if(lt->kind == TYPE_PTR && (rt == type_char() || rt == type_int()))
-            {
-                t = lt;
-
-                if(lt->base->width == 0)
-                {
-                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
-                    assert(0);
-                }
-
-                assert(lt->base->width > 0 && lt->base->width < 256);
-                fprintf(fout, " PHS PHS\n");
-                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
-                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
-                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
-                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
-            }
-            else if(rt->kind == TYPE_PTR && (lt == type_char() || lt == type_int()))
-            {
-                t = rt;
-
-                if(rt->base->width == 0)
-                {
-                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
-                    assert(0);
-                }
-
-                assert(rt->base->width > 0 && rt->base->width < 256);
-                fprintf(fout, " PHS PHS\n");
-                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
-                fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
-                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
-                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
-            }
-            else
-            {
-                fprintf(stderr, "Invalid pointer arithmetic\n");
-                assert(0);
-            }
-        }
-        else if((lt == type_char() || lt == type_int()) &&
-                (rt == type_char() || rt == type_int()))
-        {
-            if(lt == type_char() && rt == type_char())
-            {
-                t = type_char();
-            }
-            else if(lt == type_char() && rt == type_int())
-            {
-                /* NOTE: Implicit cast */
-                fprintf(fout, " PHS PHS LDA .Y PHS\n");
-                fprintf(fout, " JPS .BTOW PLS\n");
-                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
-                t = type_int();
-            }
-            else if(lt == type_int() && rt == type_char())
-            {
-                /* Implicit cast */
-                fprintf(fout, " PHS PHS LDA .X PHS\n");
-                fprintf(fout, " JPS .BTOW PLS\n");
-                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
-                t = type_int();
-            }
-            else
-            {
-                t = type_int();
-            }
-        }
-        else
-        {
-            fprintf(stderr, "Cannot add a non-arithmetic type\n");
+            fprintf(stderr, "Type mismatch in arithmetic operation: modulo\n");
             assert(0);
         }
 
-        fprintf(fout, " PHS PHS\n");
-        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
-        fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
-        fprintf(fout, " JPS .WMOD PLS PLS PLS PLS\n");
-        fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+
+        t = lt;
+        if(t == type_char())
+        {
+            fprintf(fout, " PHS\n");
+            fprintf(fout, " LDA .X PHS\n");
+            fprintf(fout, " LDA .Y PHS\n");
+            fprintf(fout, " JPS .BMOD PLS PLS\n");
+            fprintf(fout, " PLS STA .X\n");
+        }
+        else if(t == type_int())
+        {
+            fprintf(fout, " PHS PHS\n");
+            fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+            fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+            fprintf(fout, " JPS .WMOD PLS PLS PLS PLS\n");
+            fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+        }
+        else
+        {
+            fprintf(stderr, "Modulo used on non-arithmetic type\n");
+            assert(0);
+        }
     }
     else if(e->kind == EXPR_ADD)
     {
         lt = resolve_expr(e->l, 0);
-        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
         rt = resolve_expr(e->r, lt);
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
 
-        if(lt->kind == TYPE_PTR || rt->kind == TYPE_PTR)
+        if(lt->kind == TYPE_PTR)
         {
-            if(lt->kind == TYPE_PTR && (rt == type_char() || rt == type_int()))
-            {
-                t = lt;
-
-                if(lt->base->width == 0)
-                {
-                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
-                    assert(0);
-                }
-
-                assert(lt->base->width > 0 && lt->base->width < 256);
-                fprintf(fout, " PHS PHS\n");
-                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
-                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
-                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
-                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
-            }
-            else if(rt->kind == TYPE_PTR && (lt == type_char() || lt == type_int()))
-            {
-                t = rt;
-
-                if(rt->base->width == 0)
-                {
-                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
-                    assert(0);
-                }
-
-                assert(rt->base->width > 0 && rt->base->width < 256);
-                fprintf(fout, " PHS PHS\n");
-                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
-                fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
-                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
-                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
-            }
-            else
+            if(rt != type_char() && rt != type_int())
             {
                 fprintf(stderr, "Invalid pointer arithmetic\n");
                 assert(0);
             }
         }
-        else if((lt == type_char() || lt == type_int()) &&
-                (rt == type_char() || rt == type_int()))
+        else if(rt->kind == TYPE_PTR)
         {
-            if(lt == type_char() && rt == type_char())
+            if(lt != type_char() && lt != type_int())
             {
-                t = type_char();
+                fprintf(stderr, "Invalid pointer arithmetic\n");
+                assert(0);
             }
-            else if(lt == type_char() && rt == type_int())
+            t = rt;
+            rt = lt;
+            lt = t;
+            fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
+            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
+            fprintf(fout, " LDA .T STA .Y LDA .T+1 STA .Y+1\n");
+        }
+
+        t = lt;
+        if(t != lt)
+        {
+            if(t->kind == TYPE_PTR)
             {
-                /* NOTE: Implicit cast */
-                fprintf(fout, " PHS PHS LDA .Y PHS\n");
-                fprintf(fout, " JPS .BTOW PLS\n");
-                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
-                t = type_int();
-            }
-            else if(lt == type_int() && rt == type_char())
-            {
-                /* Implicit cast */
-                fprintf(fout, " PHS PHS LDA .X PHS\n");
-                fprintf(fout, " JPS .BTOW PLS\n");
-                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
-                t = type_int();
+                if(rt == type_char())
+                {
+                    /* Implicit cast from char to int (we need a word) */
+                    fprintf(fout, " PHS PHS LDA .X PHS\n");
+                    fprintf(fout, " JPS .BTOW PLS\n");
+                    fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+
+                    /* TODO: Handle this case? (width > 128, we need i16 to store it) */
+                    assert(lt->base->width > 0 && lt->base->width < 128);
+
+                    fprintf(fout, " PHS PHS\n");
+                    fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                    fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+                    fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                    fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+
+                    fprintf(fout, " LDA .Y ADB .X LDA .Y+1 ACB .X+1\n");
+                }
+                else if(rt == type_int())
+                {
+                    /* TODO: Handle this case? (width > 128, we need i16 to store it) */
+                    assert(lt->base->width > 0 && lt->base->width < 128);
+
+                    fprintf(fout, " PHS PHS\n");
+                    fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                    fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+                    fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                    fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+
+                    fprintf(fout, " LDA .Y ADB .X LDA .Y+1 ACB .X+1\n");
+                }
+                else
+                {
+                    fprintf(stderr, "Invalid pointer arithmetic\n");
+                    assert(0);
+                }
             }
             else
             {
-                t = type_int();
+                fprintf(stderr, "Invalid addition (type mismatch)\n");
+                assert(0);
             }
         }
         else
         {
-            fprintf(stderr, "Cannot add a non-arithmetic type\n");
-            assert(0);
-        }
-
-        if(t->width == 1)
-        {
-            fprintf(fout, " LDA .Y ADB .X\n");
-        }
-        else if(t->width == 2)
-        {
-            fprintf(fout, " LDA .Y ADB .X LDA .Y+1 ACB .X+1\n");
-        }
-        else
-        {
-            assert(0);
+            if(t == type_char())
+            {
+                fprintf(fout, " LDA .Y ADB .X\n");
+            }
+            else if(t == type_int())
+            {
+                fprintf(fout, " LDA .Y ADB .X LDA .Y+1 ACB .X+1\n");
+            }
+            else
+            {
+                fprintf(stderr, "Addition used on non-arithmetic type\n");
+            }
         }
     }
     else if(e->kind == EXPR_SUB)
     {
         lt = resolve_expr(e->l, 0);
-        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
         rt = resolve_expr(e->r, lt);
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
 
-        if(lt->kind == TYPE_PTR || rt->kind == TYPE_PTR)
+        if(lt->kind == TYPE_PTR)
         {
-            if(lt->kind == TYPE_PTR && (rt == type_char() || rt == type_int()))
-            {
-                t = lt;
-
-                if(lt->base->width == 0)
-                {
-                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
-                    assert(0);
-                }
-
-                assert(lt->base->width > 0 && lt->base->width < 256);
-                fprintf(fout, " PHS PHS\n");
-                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
-                fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
-                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
-                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
-            }
-            else if(rt->kind == TYPE_PTR && (lt == type_char() || lt == type_int()))
-            {
-                t = rt;
-
-                if(rt->base->width == 0)
-                {
-                    fprintf(stderr, "Cannot apply ptr arithmetic on a void ptr\n");
-                    assert(0);
-                }
-
-                assert(rt->base->width > 0 && rt->base->width < 256);
-                fprintf(fout, " PHS PHS\n");
-                fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
-                fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
-                fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
-                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
-            }
-            else
+            if(rt != type_char() && rt != type_int())
             {
                 fprintf(stderr, "Invalid pointer arithmetic\n");
                 assert(0);
             }
         }
-        else if((lt == type_char() || lt == type_int()) &&
-                (rt == type_char() || rt == type_int()))
+        else if(rt->kind == TYPE_PTR)
         {
-            if(lt == type_char() && rt == type_char())
+            if(lt != type_char() && lt != type_int())
             {
-                t = type_char();
+                fprintf(stderr, "Invalid pointer arithmetic\n");
+                assert(0);
             }
-            else if(lt == type_char() && rt == type_int())
+            t = rt;
+            rt = lt;
+            lt = t;
+            fprintf(fout, " LDA .X STA .T LDA .X+1 STA .T+1\n");
+            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
+            fprintf(fout, " LDA .T STA .Y LDA .T+1 STA .Y+1\n");
+        }
+
+        t = lt;
+        if(t != lt)
+        {
+            if(t->kind == TYPE_PTR)
             {
-                /* Implicit cast */
-                fprintf(fout, " PHS PHS LDA .Y PHS\n");
-                fprintf(fout, " JPS .BTOW PLS\n");
-                fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
-                t = type_int();
-            }
-            else if(lt == type_int() && rt == type_char())
-            {
-                /* Implicit cast */
-                fprintf(fout, " PHS PHS LDA .X PHS\n");
-                fprintf(fout, " JPS .BTOW PLS\n");
-                fprintf(fout, " PLS STA .X PLS STA .X+1\n");
-                t = type_int();
+                if(rt == type_char())
+                {
+                    /* Implicit cast from char to int (we need a word) */
+                    fprintf(fout, " PHS PHS LDA .X PHS\n");
+                    fprintf(fout, " JPS .BTOW PLS\n");
+                    fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+
+                    /* TODO: Handle this case? (width > 128, we need i16 to store it) */
+                    assert(lt->base->width > 0 && lt->base->width < 128);
+
+                    fprintf(fout, " PHS PHS\n");
+                    fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                    fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+                    fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                    fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+
+                    fprintf(fout, " LDA .X SBB .Y LDA .X+1 SCB .Y+1\n");
+                    fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
+                }
+                else if(rt == type_int())
+                {
+                    /* TODO: Handle this case? (width > 128, we need i16 to store it) */
+                    assert(lt->base->width > 0 && lt->base->width < 128);
+
+                    fprintf(fout, " PHS PHS\n");
+                    fprintf(fout, " LDI 0 PHS LDI %d PHS\n", lt->base->width);
+                    fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+                    fprintf(fout, " JPS .WMUL PLS PLS PLS PLS\n");
+                    fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+
+                    fprintf(fout, " LDA .X SBB .Y LDA .X+1 SCB .Y+1\n");
+                    fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
+                }
+                else
+                {
+                    fprintf(stderr, "Invalid pointer arithmetic\n");
+                    assert(0);
+                }
             }
             else
             {
-                t = type_int();
+                fprintf(stderr, "Invalid subtraction (type mismatch)\n");
+                assert(0);
             }
         }
         else
         {
-            fprintf(stderr, "Cannot add a non-arithmetic type\n");
-            assert(0);
-        }
-
-        if(t->width == 1)
-        {
-            fprintf(fout, " LDA .X SBB .Y\n");
-            fprintf(fout, " LDA .Y STA .X\n");
-        }
-        else if(t->width == 2)
-        {
-            fprintf(fout, " LDA .X SBB .Y LDA .X+1 SCB .Y+1\n");
-            fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
-        }
-        else
-        {
-            assert(0);
+            if(t == type_char())
+            {
+                fprintf(fout, " LDA .X SBB .Y LDA .Y STA .Y\n");
+            }
+            else if(t == type_int())
+            {
+                fprintf(fout, " LDA .X SBB .Y LDA .X+1 SCB .Y+1\n");
+                fprintf(fout, " LDA .Y STA .X LDA .Y+1 STA .X+1\n");
+            }
+            else
+            {
+                fprintf(stderr, "Subtraction used on non-arithmetic type\n");
+            }
         }
     }
     else if(e->kind == EXPR_LESS || e->kind == EXPR_LESSEQ ||
             e->kind == EXPR_GRTR || e->kind == EXPR_GRTREQ)
     {
         lt = resolve_expr(e->l, 0);
-        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
         rt = resolve_expr(e->r, lt);
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
 
         if(lt != rt)
         {
-            fprintf(stderr, "Cannot compare two different types\n");
+            fprintf(stderr, "Type mismatch in comparision expression\n");
             assert(0);
         }
 
         if(lt == type_char())
         {
-            fprintf(fout, " PHS PHS LDA .X PHS\n");
-            fprintf(fout, " JPS .BTOW PLS\n");
-            fprintf(fout, " PLS STA .X PLS STA .X+1\n");
-
-            fprintf(fout, " PHS PHS LDA .Y PHS\n");
-            fprintf(fout, " JPS .BTOW PLS\n");
-            fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
+            fprintf(fout, " PHS\n");
+            fprintf(fout, " LDA .X PHS LDA .Y PHS\n");
+                 if(e->kind == EXPR_LESS)   { fprintf(fout, " JPS .BLESS\n"); }
+            else if(e->kind == EXPR_LESSEQ) { fprintf(fout, " JPS .BLESSEQ\n"); }
+            else if(e->kind == EXPR_GRTR)   { fprintf(fout, " JPS .BGRTR\n"); }
+            else if(e->kind == EXPR_GRTREQ) { fprintf(fout, " JPS .BGRTREQ\n"); }
+            else { assert(0); }
+            fprintf(fout, " PLS PLS PLS STA .X\n");
         }
-        else if(lt == type_int() || lt->kind == TYPE_PTR)
+        else if(lt == type_int())
         {
-            /* Nothing */
+            fprintf(fout, " PHS\n");
+            fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+            fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+                 if(e->kind == EXPR_LESS)   { fprintf(fout, " JPS .WLESS\n"); }
+            else if(e->kind == EXPR_LESSEQ) { fprintf(fout, " JPS .WLESSEQ\n"); }
+            else if(e->kind == EXPR_GRTR)   { fprintf(fout, " JPS .WGRTR\n"); }
+            else if(e->kind == EXPR_GRTREQ) { fprintf(fout, " JPS .WGRTREQ\n"); }
+            else { assert(0); }
+            fprintf(fout, " PLS PLS PLS PLS PLS STA .X\n");
+        }
+        else if(lt->kind == TYPE_PTR)
+        {
+            fprintf(fout, " PHS\n");
+            fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
+            fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+                 if(e->kind == EXPR_LESS)   { fprintf(fout, " JPS .PLESS\n"); }
+            else if(e->kind == EXPR_LESSEQ) { fprintf(fout, " JPS .PLESSEQ\n"); }
+            else if(e->kind == EXPR_GRTR)   { fprintf(fout, " JPS .PGRTR\n"); }
+            else if(e->kind == EXPR_GRTREQ) { fprintf(fout, " JPS .PGRTREQ\n"); }
+            else { assert(0); }
+            fprintf(fout, " PLS PLS PLS PLS PLS STA .X\n");
         }
         else
         {
-            fprintf(stderr, "Invalid types in comparison\n");
+            fprintf(stderr, "Comparision on invalid type\n");
             assert(0);
         }
-
-             if(e->kind == EXPR_LESS)   { ins = ".WLESS"; }
-        else if(e->kind == EXPR_LESSEQ) { ins = ".WLESSEQ"; }
-        else if(e->kind == EXPR_GRTR)   { ins = ".WGRTR"; }
-        else if(e->kind == EXPR_GRTREQ) { ins = ".WGRTREQ"; }
-        else { assert(0); }
-
-        fprintf(fout, " PHS\n");
-        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
-        fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
-        fprintf(fout, " JPS %s\n", ins);
-        fprintf(fout, " PLS PLS PLS PLS\n");
-        fprintf(fout, " PLS STA .X LDI 0 STA .X+1\n");
 
         t = type_char();
     }
     else if(e->kind == EXPR_EQ || e->kind == EXPR_NEQ)
     {
         lt = resolve_expr(e->l, 0);
-        fprintf(fout, " LDA .X STA .Y LDA .X+1 STA .Y+1\n");
+        fprintf(fout, " LDA .X+1 PHS LDA .X PHS\n");
         rt = resolve_expr(e->r, lt);
+        fprintf(fout, " PLS STA .Y PLS STA .Y+1\n");
 
         if(lt != rt)
         {
-            fprintf(stderr, "Cannot compare two different types\n");
+            fprintf(stderr, "Type mismatch in comparision expression\n");
             assert(0);
         }
 
         if(lt == type_char())
         {
-            fprintf(fout, " LDI 0 STA .X+1 STA .Y+1\n");
+            lbl1 = newlbl();
+            lbl2 = newlbl();
+
+            fprintf(fout, " LDA .X SBB .Y LDA .Y CPI 0\n");
+                 if(e->kind == EXPR_EQ)  { fprintf(fout, " BEQ .L%d\n", lbl1); }
+            else if(e->kind == EXPR_NEQ) { fprintf(fout, " BNE .L%d\n", lbl1); }
+            fprintf(fout, " LDI 0 STA .X JPA .L%d\n", lbl2);
+            fprintf(fout, ".L%d:", lbl1);
+            fprintf(fout, " LDI 0xff STA .X\n");
+            fprintf(fout, ".L%d:", lbl2);
         }
         else if(lt == type_int() || lt->kind == TYPE_PTR)
         {
-            /* Nothing */
+            fprintf(fout, " LDA .X SBB .Y LDA .X+1 SCB .Y+1\n");
+            fprintf(fout, " PHS\n");
+            fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
+            fprintf(fout, " JPS .WZERO PLS PLS PLS\n");
+            if(e->kind == EXPR_NEQ)
+            {
+                fprintf(fout, " NEG\n");
+            }
+            fprintf(fout, " STA .X\n");
         }
         else
         {
-            fprintf(stderr, "Invalid types in comparison\n");
+            fprintf(stderr, "Comparision on invalid type\n");
             assert(0);
         }
-
-        fprintf(fout, " LDA .X SBB .Y LDA .X+1 SCB .Y+1\n");
-        fprintf(fout, " PHS\n");
-        fprintf(fout, " LDA .Y+1 PHS LDA .Y PHS\n");
-        fprintf(fout, " JPS .WZERO PLS PLS PLS\n");
-        if(e->kind == EXPR_NEQ)
-        {
-            fprintf(fout, " NEG\n");
-        }
-        fprintf(fout, " STA .X LDI 0 STA .X+1\n");
 
         t = type_char();
     }
@@ -2493,15 +2325,23 @@ resolve_expr(Expr *e, Type *wanted)
     }
     else
     {
+        fprintf(stderr, "Cannot resolve the expression\n");
         assert(0);
+    }
+
+    if(t == type_char() && wanted == type_int())
+    {
+        /* Implicit cast */
+        fprintf(fout, " PHS PHS LDA .X PHS\n");
+        fprintf(fout, " JPS .BTOW PLS\n");
+        fprintf(fout, " PLS STA .X PLS STA .X+1\n");
+        t = type_int();
     }
 
     assert(t);
 
     return(t);
 }
-
-#endif
 
 Expr *
 revargs(Expr *args)
